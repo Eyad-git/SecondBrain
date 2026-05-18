@@ -13,8 +13,8 @@ export function PaneGrid() {
   const activeNodeSync = useActiveNodeSync();
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-y-3 px-6 py-4">
-      <div className="grid shrink-0 grid-cols-2 gap-x-4 items-start">
+    <div className="flex min-h-0 flex-1 flex-col gap-y-4 px-7 py-5">
+      <div className="grid shrink-0 grid-cols-2 items-start gap-5">
         <div className="min-h-0 min-w-0">
           <ContextPane sync={activeNodeSync} />
         </div>
@@ -23,7 +23,7 @@ export function PaneGrid() {
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-4">
+      <div className="grid min-h-0 flex-1 grid-cols-2 gap-5 [grid-template-rows:minmax(0,1fr)]">
         <div className="flex min-h-0 min-w-0 flex-col">
           <AskPane />
         </div>

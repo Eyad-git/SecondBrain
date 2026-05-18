@@ -11,8 +11,10 @@ import { z } from "zod";
 import { googleGenerativeAiModelId } from "@/lib/ai/google-generative-model";
 import { stringifyUserUiMessages } from "@/lib/chat/extract-user-text-from-ui";
 import { buildGraphSystemAugmentation } from "@/lib/chat/graph-chat-context";
+import { baseAssistantInstructions } from "@/lib/chat/system-instructions";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { fetchPublicPageTool } from "@/lib/tools/fetch-public-page-tool";
+import { suggestIntegrationsTool } from "@/lib/tools/suggest-integrations-tool";
 
 export const runtime = "nodejs";
 
@@ -46,13 +48,19 @@ export async function POST(req: Request) {
       "You are the Second Brain AI OS: concise, practical, and honest about uncertainty.",
       "When graph context is supplied, weight it heavily. If it is empty, do not invent node data.",
       "Respect user privacy: only reason about data that appears in messages or the graph block.",
+      "Be proactively curious about the user's past baseline, present constraints, and future goals.",
     ].join(" ");
 
     const toolsInstructions =
-      "You may call fetch_public_page when the user explicitly provides HTTP(S) URLs you must read verbatim from the wire. Prefer summarizing the returned excerpt; mention fetch failures honestly.";
+      [
+        "You may call fetch_public_page when the user explicitly provides HTTP(S) URLs you must read verbatim from the wire.",
+        "You may call suggest_integrations when domain context implies useful API connections. Offer suggestions and ask user consent before any integration workflow.",
+        "Prefer summarizing tool output and mention fetch failures honestly.",
+      ].join(" ");
 
     const system = [
       core,
+      baseAssistantInstructions({ allowIntegrationSuggestions: true }),
       graphBlock,
       `(Tools) ${toolsInstructions}`,
       graphBlock
@@ -62,9 +70,11 @@ export async function POST(req: Request) {
       .filter(Boolean)
       .join("\n\n");
 
-    const withoutIds = uiMessages.map(
-      ({ id: _id, ...rest }) => rest
-    ) as Omit<UIMessage, "id">[];
+    const withoutIds = uiMessages.map((m) => {
+      const rest = { ...m } as Partial<UIMessage>;
+      delete rest.id;
+      return rest as Omit<UIMessage, "id">;
+    });
 
     const modelMessages = await convertToModelMessages(withoutIds);
 
@@ -74,6 +84,7 @@ export async function POST(req: Request) {
       messages: modelMessages,
       tools: {
         fetch_public_page: fetchPublicPageTool,
+        suggest_integrations: suggestIntegrationsTool,
       },
       stopWhen: stepCountIs(10),
     });

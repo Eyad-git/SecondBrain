@@ -18,6 +18,7 @@ import {
 } from "@/components/editor/ask-editor";
 import { ChatConfirmModal } from "@/components/chat/chat-confirm-modal";
 import { ChatRecycleBinPanel } from "@/components/chat/chat-recycle-bin-panel";
+import { MermaidDiagram } from "@/components/ui/mermaid-diagram";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -31,6 +32,29 @@ import { extractMentionedNodeIds } from "@/lib/chat/mention-extract";
 type Props = {
   anchorNodeId: string | null;
 };
+
+type TextSegment =
+  | { kind: "text"; value: string }
+  | { kind: "mermaid"; value: string };
+
+function splitTextWithMermaid(value: string): TextSegment[] {
+  const blocks: TextSegment[] = [];
+  const rx = /```mermaid\s*([\s\S]*?)```/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = rx.exec(value)) !== null) {
+    const before = value.slice(cursor, match.index).trim();
+    if (before) blocks.push({ kind: "text", value: before });
+    const diagram = (match[1] ?? "").trim();
+    if (diagram) blocks.push({ kind: "mermaid", value: diagram });
+    cursor = rx.lastIndex;
+  }
+
+  const tail = value.slice(cursor).trim();
+  if (tail) blocks.push({ kind: "text", value: tail });
+  return blocks.length > 0 ? blocks : [{ kind: "text", value }];
+}
 
 function collectUserTexts(messages: UIMessage[]): string {
   const parts: string[] = [];
@@ -51,13 +75,27 @@ function Bubble({ message }: { message: UIMessage }) {
   const body: ReactNode[] = [];
   message.parts.forEach((part, i) => {
     if (part.type === "text") {
+      const segments = splitTextWithMermaid(part.text);
       body.push(
-        <p
-          key={`${message.id}-t-${i}`}
-          className="mb-2 whitespace-pre-wrap last:mb-0"
-        >
-          {part.text}
-        </p>
+        <div key={`${message.id}-t-${i}`} className="mb-2 space-y-2 last:mb-0">
+          {segments.map((segment, segmentIndex) =>
+            segment.kind === "text" ? (
+              <p
+                key={`${message.id}-t-${i}-${segmentIndex}`}
+                className="whitespace-pre-wrap"
+              >
+                {segment.value}
+              </p>
+            ) : (
+              <div
+                key={`${message.id}-m-${i}-${segmentIndex}`}
+                className="overflow-x-auto rounded-lg border border-border/70 bg-background/60 p-2"
+              >
+                <MermaidDiagram chart={segment.value} />
+              </div>
+            )
+          )}
+        </div>
       );
       return;
     }
@@ -76,7 +114,7 @@ function Bubble({ message }: { message: UIMessage }) {
   return (
     <div
       className={cn(
-        "rounded-xl border px-3 py-2 text-sm leading-relaxed",
+        "rounded-xl border px-4 py-3 text-[0.95rem] leading-relaxed",
         isUser
           ? "ml-8 border-primary/35 bg-primary/12 text-foreground"
           : "mr-8 border-border bg-muted/40 text-muted-foreground"
@@ -179,7 +217,7 @@ export function AskChatPanel({ anchorNodeId }: Props) {
     !busy;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3.5">
       {/* Actions first so they are never clipped under the fold (pane uses overflow-hidden). */}
       <div className="flex shrink-0 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-2">
@@ -220,23 +258,34 @@ export function AskChatPanel({ anchorNodeId }: Props) {
         </p>
       </div>
 
-      <div className="min-h-[8rem] flex-1 overflow-y-auto rounded-lg border border-border/80 bg-muted/15 px-3 py-2">
-        {messages.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
-            {!anchorNodeId
-              ? "Select a graph node — the assistant anchors context to it alongside @mentions."
-              : busy
-                ? "Streaming…"
-                : "Compose below and Send. Type @ to reference other rows you own."}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-3 pb-2">
-            {messages.map((m) => (
-              <Bubble key={m.id} message={m} />
-            ))}
-          </div>
-        )}
-        <div ref={bottomRef} aria-hidden />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/80 bg-muted/10">
+        <div className="min-h-[10rem] flex-1 overflow-y-auto px-4 py-3">
+          {messages.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              {!anchorNodeId
+                ? "Select a graph node — the assistant anchors context to it alongside @mentions."
+                : busy
+                  ? "Streaming…"
+                  : "Compose below and Send. Type @ to reference other rows you own."}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3 pb-2">
+              {messages.map((m) => (
+                <Bubble key={m.id} message={m} />
+              ))}
+            </div>
+          )}
+          <div ref={bottomRef} aria-hidden />
+        </div>
+        <div className="border-t border-border/70 bg-background/40">
+          <AskEditor
+            ref={editorRef}
+            disabled={!anchorNodeId || busy}
+            onSubmit={handleSubmit}
+            submitDisabled={busy}
+            embedded
+          />
+        </div>
       </div>
 
       {error ? (
@@ -270,12 +319,6 @@ export function AskChatPanel({ anchorNodeId }: Props) {
         }}
       />
 
-      <AskEditor
-        ref={editorRef}
-        disabled={!anchorNodeId || busy}
-        onSubmit={handleSubmit}
-        submitDisabled={busy}
-      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ const NEXT_Q_MIN_LEN = 15;
 
 const bodySchema = z.object({
   nodeId: z.string().uuid(),
+  question: z.string().optional(),
   answer: z.string(),
 });
 
@@ -54,7 +55,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { nodeId, answer } = bodySchema.parse(await req.json());
+    const { nodeId, answer, question } = bodySchema.parse(await req.json());
 
     const supabase = await createSupabaseServerClient();
 
@@ -96,7 +97,13 @@ export async function POST(req: Request) {
       });
     }
 
-    const currentQuestion = questions[0];
+    const selectedQuestion =
+      typeof question === "string" ? question.trim() : "";
+    const selectedIndex = selectedQuestion
+      ? questions.findIndex((q) => q === selectedQuestion)
+      : -1;
+    const questionIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    const currentQuestion = questions[questionIndex];
 
     const trimmed = answer.trim();
     if (trimmed.length === 0) {
@@ -178,7 +185,7 @@ export async function POST(req: Request) {
       });
     }
 
-    let restQueue = questions.slice(1);
+    let restQueue = questions.filter((_, index) => index !== questionIndex);
     const follow = object.next_question_if_any?.trim() ?? "";
     if (follow.length >= NEXT_Q_MIN_LEN) {
       restQueue = [...restQueue, follow].slice(0, 6);

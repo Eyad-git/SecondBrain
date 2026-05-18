@@ -19,6 +19,7 @@ export type LinkedInfluence = {
 export type ActiveNodeSyncState = {
   loading: boolean;
   error: string | null;
+  linksError: string | null;
   influences: LinkedInfluence[];
 };
 
@@ -34,12 +35,14 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
   const [state, setState] = useState<ActiveNodeSyncState>({
     loading: false,
     error: null,
+    linksError: null,
     influences: [],
   });
 
   useEffect(() => {
     if (!nodeId) {
-      setState({ loading: false, error: null, influences: [] });
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setState({ loading: false, error: null, linksError: null, influences: [] });
       return;
     }
 
@@ -49,6 +52,7 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
       setState({
         loading: true,
         error: null,
+        linksError: null,
         influences: [],
       });
 
@@ -65,13 +69,19 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
       if (cancelled) return;
 
       if (rowErr) {
-        setState({ loading: false, error: rowErr.message, influences: [] });
+        setState({
+          loading: false,
+          error: rowErr.message,
+          linksError: null,
+          influences: [],
+        });
         return;
       }
       if (!row) {
         setState({
           loading: false,
           error: "Node not found or you do not have access.",
+          linksError: null,
           influences: [],
         });
         return;
@@ -84,6 +94,7 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
           loading: false,
           error:
             "That node is in the recycle bin. Restore it from the sidebar recycle bin to open it.",
+          linksError: null,
           influences: [],
         });
         return;
@@ -112,8 +123,9 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
 
       if (cancelled) return;
 
-      if (oErr || iErr) {
-        console.error("[active-node-sync] links:", oErr ?? iErr);
+      const combinedLinkError = oErr?.message ?? iErr?.message ?? null;
+      if (combinedLinkError) {
+        console.error("[active-node-sync] links:", combinedLinkError);
       }
 
       const peerIds = new Set<string>();
@@ -125,13 +137,17 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
       }
 
       let titles = new Map<string, string>();
+      let titleLoadError: string | null = null;
       if (peerIds.size > 0) {
-        const { data: nodes } = await supabase
+        const { data: nodes, error: titleErr } = await supabase
           .from("nodes")
           .select("id,title")
           .in("id", [...peerIds])
           .is("archived_at", null);
-        titles = new Map((nodes ?? []).map((n) => [String(n.id), n.title ?? "Untitled"]));
+        titleLoadError = titleErr?.message ?? null;
+        titles = new Map(
+          (nodes ?? []).map((n) => [String(n.id), n.title ?? "Untitled"])
+        );
       }
 
       if (cancelled) return;
@@ -147,10 +163,12 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
         };
         influences.push({
           linkId: row.id,
-          peerId: row.target_node_id,
-          peerTitle: titles.get(row.target_node_id) ?? "Untitled node",
+          peerId: String(row.target_node_id),
+          peerTitle:
+            titles.get(String(row.target_node_id)) ??
+            "Unavailable or archived node",
           direction: "outbound",
-          priority_weight: row.priority_weight,
+          priority_weight: Number(row.priority_weight) || 0,
           relationship_context: row.relationship_context,
         });
       }
@@ -164,17 +182,23 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
         };
         influences.push({
           linkId: row.id,
-          peerId: row.source_node_id,
-          peerTitle: titles.get(row.source_node_id) ?? "Untitled node",
+          peerId: String(row.source_node_id),
+          peerTitle:
+            titles.get(String(row.source_node_id)) ??
+            "Unavailable or archived node",
           direction: "inbound",
-          priority_weight: row.priority_weight,
+          priority_weight: Number(row.priority_weight) || 0,
           relationship_context: row.relationship_context,
         });
       }
 
       influences.sort((a, b) => b.priority_weight - a.priority_weight);
 
-      setState({ loading: false, error: null, influences });
+      const linksError =
+        combinedLinkError || titleLoadError
+          ? "Linked nodes could not be fully loaded right now."
+          : null;
+      setState({ loading: false, error: null, linksError, influences });
     }
 
     void load();
@@ -182,7 +206,7 @@ export function useActiveNodeSync(): ActiveNodeSyncState {
     return () => {
       cancelled = true;
     };
-  }, [nodeId, mergeNodeSnapshot]);
+  }, [nodeId, mergeNodeSnapshot, setSelectedNodeId]);
 
   return state;
 }

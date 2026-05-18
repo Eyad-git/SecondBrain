@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const editorShell =
-  "ask-editor-shell min-h-[7rem] max-h-[38vh] w-full rounded-lg border border-border bg-muted/20 px-1";
+  "ask-editor-shell min-h-[8.5rem] w-full rounded-lg border border-border/80 bg-background/70 px-1";
 
 export type AskEditorHandle = {
   clear: () => void;
@@ -33,6 +33,7 @@ export type AskEditorProps = {
   disabled?: boolean;
   onSubmit?: () => void | Promise<void>;
   submitDisabled?: boolean;
+  embedded?: boolean;
 };
 
 export const AskEditor = forwardRef<AskEditorHandle, AskEditorProps>(
@@ -43,6 +44,7 @@ export const AskEditor = forwardRef<AskEditorHandle, AskEditorProps>(
       disabled,
       onSubmit,
       submitDisabled,
+      embedded,
     }: AskEditorProps,
     ref
   ) => {
@@ -67,7 +69,7 @@ export const AskEditor = forwardRef<AskEditorHandle, AskEditorProps>(
         editorProps: {
           attributes: {
             class:
-              "min-h-[6.75rem] max-h-[calc(38vh-2.75rem)] w-full overflow-y-auto px-3 py-2 text-[0.9rem] leading-relaxed text-foreground [&_p]:my-0",
+              "min-h-[7.25rem] max-h-[19rem] w-full overflow-y-auto px-4 py-3 text-[0.97rem] leading-relaxed text-foreground [&_p]:my-0",
           },
           handleKeyDown(_view, ev) {
             if (disabled || submitDisabled) return false;
@@ -103,10 +105,22 @@ export const AskEditor = forwardRef<AskEditorHandle, AskEditorProps>(
     }, [disabled, onSubmit, submitDisabled]);
 
     return (
-      <div className={cn(editorShell, className)}>
+      <div
+        className={cn(
+          editorShell,
+          embedded &&
+            "min-h-[7.5rem] rounded-none border-0 bg-transparent px-0 shadow-none",
+          className
+        )}
+      >
         <EditorContent editor={editor} className="[&_.ProseMirror]:outline-none" />
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/80 px-3 py-2">
-          <p className="text-muted-foreground text-[11px]">
+        <div
+          className={cn(
+            "flex flex-wrap items-center justify-between gap-2 border-t border-border/80 px-3 py-2.5",
+            embedded && "px-4"
+          )}
+        >
+          <p className="text-muted-foreground text-xs">
             Mention menu pulls your <code className="text-foreground">nodes</code>{" "}
             through RLS.{" "}
             <span className="text-muted-foreground/90">
