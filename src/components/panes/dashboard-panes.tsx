@@ -1,7 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { ChevronDown } from "lucide-react";
 
 import { AskChatPanel } from "@/components/chat/ask-chat-panel";
 import type { ActiveNodeSyncState, LinkedInfluence } from "@/hooks/use-active-node-sync";
@@ -12,38 +14,109 @@ import {
 } from "@/lib/store/use-node-store";
 import type { NodeStatus } from "@/types/nodes";
 
+const PANE_COLLAPSE_PREFIX = "sb.dashboard.pane.";
+
+function usePersistedPaneCollapsed(paneId: string) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(PANE_COLLAPSE_PREFIX + paneId) === "1") {
+        setCollapsed(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [paneId]);
+
+  const toggle = useCallback(() => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(PANE_COLLAPSE_PREFIX + paneId, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, [paneId]);
+
+  return { collapsed, toggle };
+}
+
 function PaneCard({
   title,
   eyebrow,
   contentClassName,
   className,
+  paneId,
+  /** When true, collapsing removes flex growth (bottom-row Ask / Plan). */
+  collapseShrinksHeight,
   children,
 }: {
   title: string;
   eyebrow: string;
   contentClassName?: string;
+  /** Stable id for collapse persistence (`context`, `questions`, `ask`, `plan`). */
+  paneId: string;
+  collapseShrinksHeight?: boolean;
   /** Section root (e.g. `flex-1 min-h-0` when pane should fill a flex/grid cell). */
   className?: string;
   children: ReactNode;
 }) {
+  const { collapsed, toggle } = usePersistedPaneCollapsed(paneId);
+
   return (
     <section
       className={cn(
         "flex min-h-0 flex-col rounded-xl border border-border bg-card text-card-foreground shadow-sm ring-1 ring-black/5 dark:ring-white/10",
+        collapsed &&
+          (collapseShrinksHeight
+            ? "!max-h-none shrink-0 !flex-none"
+            : "shrink-0"),
         className
       )}
     >
-      <header className="shrink-0 border-b border-border px-4 py-3">
-        <p className="text-[0.65rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-          {eyebrow}
-        </p>
-        <h2 className="text-lg font-semibold">{title}</h2>
+      <header
+        className={cn(
+          "flex shrink-0 items-start justify-between gap-2 px-4 py-3",
+          collapsed ? "border-0" : "border-b border-border"
+        )}
+      >
+        <div className="min-w-0 flex-1">
+          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+            {eyebrow}
+          </p>
+          <h2 className="text-lg font-semibold">{title}</h2>
+        </div>
+        <button
+          type="button"
+          onClick={toggle}
+          className={cn(
+            "mt-0.5 shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors",
+            "hover:bg-muted hover:text-foreground",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          )}
+          aria-expanded={!collapsed}
+          aria-controls={`${paneId}-pane-content`}
+          title={collapsed ? "Expand panel" : "Collapse panel"}
+        >
+          <ChevronDown
+            className={cn(
+              "size-5 transition-transform duration-200",
+              collapsed && "-rotate-90"
+            )}
+            aria-hidden
+          />
+        </button>
       </header>
       <div
-        className={
+        id={`${paneId}-pane-content`}
+        className={cn(
           contentClassName ??
-          "min-h-0 overflow-y-auto px-4 py-3 text-sm leading-relaxed text-muted-foreground"
-        }
+            "min-h-0 overflow-y-auto px-4 py-3 text-sm leading-relaxed text-muted-foreground",
+          collapsed && "hidden"
+        )}
       >
         {children}
       </div>
@@ -78,9 +151,10 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const nodeTitle = useSelectedNodeTitle();
 
   const core = snapshot?.core_summary?.trim();
+  const systemPrompt = snapshot?.system_prompt?.trim();
 
   return (
-    <PaneCard title="Context" eyebrow={`Node · ${nodeTitle}`}>
+    <PaneCard paneId="context" title="Context" eyebrow={`Node · ${nodeTitle}`}>
       {sync.loading ? (
         <p className="text-muted-foreground">Loading node context…</p>
       ) : null}
@@ -93,7 +167,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
         </p>
       ) : (
         <>
-          <p className="text-foreground">
+          <p className="text-foreground whitespace-pre-wrap">
             {core && core.length > 0 ? (
               core
             ) : (
@@ -103,6 +177,21 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
               </span>
             )}
           </p>
+          <div className="mt-4 space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              System prompt
+            </p>
+            {systemPrompt && systemPrompt.length > 0 ? (
+              <div className="max-h-64 overflow-y-auto rounded-lg border border-border/80 bg-muted/30 px-3 py-2 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap">
+                {systemPrompt}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-xs italic">
+                No system prompt yet—Architect fills this when you create a node
+                or when onboarding runs.
+              </p>
+            )}
+          </div>
           <div className="mt-4 space-y-2">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               Linked nodes
@@ -132,9 +221,11 @@ export function AskPane() {
 
   return (
     <PaneCard
+      paneId="ask"
       title="Ask"
       eyebrow={`Chat · ${nodeTitle}`}
       className="min-h-0 flex-1"
+      collapseShrinksHeight
       contentClassName="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 py-3"
     >
       <AskChatPanel anchorNodeId={nodeId} />
@@ -346,6 +437,7 @@ export function QuestionsPane() {
 
   return (
     <PaneCard
+      paneId="questions"
       title="Questions"
       eyebrow={`Onboarding · ${nodeTitle}`}
       contentClassName="flex max-h-[min(52vh,28rem)] flex-col gap-3 overflow-y-auto px-4 py-3 text-sm"
@@ -419,9 +511,11 @@ export function PlanPane() {
 
   return (
     <PaneCard
+      paneId="plan"
       title="Plan"
       eyebrow={`Living doc · ${nodeTitle}`}
       className="min-h-0 w-full self-start"
+      collapseShrinksHeight
     >
       {!nodeId ? (
         <p className="text-muted-foreground">
