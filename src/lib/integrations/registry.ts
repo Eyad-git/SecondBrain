@@ -68,3 +68,29 @@ export function discoverIntegrations(
   return scored;
 }
 
+export function lookupIntegrationByName(
+  query: string
+): IntegrationCandidate | null {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) return null;
+
+  const exact = integrationRegistry.find(
+    (candidate) =>
+      candidate.name.toLowerCase() === trimmed ||
+      candidate.id.toLowerCase() === trimmed
+  );
+  if (exact) return exact;
+
+  const byKeyword = integrationRegistry.find((candidate) =>
+    candidate.keywords.some((keyword) =>
+      keyword.toLowerCase().includes(trimmed) || trimmed.includes(keyword.toLowerCase())
+    )
+  );
+  if (byKeyword) return byKeyword;
+
+  const byPartialName = integrationRegistry.find((candidate) =>
+    candidate.name.toLowerCase().includes(trimmed)
+  );
+  return byPartialName ?? null;
+}
+

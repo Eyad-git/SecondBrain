@@ -14,7 +14,7 @@ import {
   useNodeStore,
   useSelectedNodeTitle,
 } from "@/lib/store/use-node-store";
-import type { NodeStatus } from "@/types/nodes";
+import type { NodeApiIntegration, NodeStatus } from "@/types/nodes";
 
 const PANE_COLLAPSE_PREFIX = "sb.dashboard.pane.";
 
@@ -152,12 +152,390 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
     nodeId ? s.nodesById[nodeId] : undefined
   );
   const nodeTitle = useSelectedNodeTitle();
+  const nodeIntegrations = useNodeStore((s) =>
+    nodeId
+      ? (s.integrationsByNodeId[nodeId] ?? EMPTY_NODE_INTEGRATIONS)
+      : EMPTY_NODE_INTEGRATIONS
+  );
+  const setNodeIntegrations = useNodeStore((s) => s.setNodeIntegrations);
+  const [integrationName, setIntegrationName] = useState("");
+  const [integrationBaseUrl, setIntegrationBaseUrl] = useState("");
+  const [integrationAuth, setIntegrationAuth] = useState<
+    NodeApiIntegration["auth"]
+  >("unknown");
+  const [integrationNotes, setIntegrationNotes] = useState("");
+  const [integrationCredential, setIntegrationCredential] = useState("");
+  const [integrationLoading, setIntegrationLoading] = useState(false);
+  const [integrationError, setIntegrationError] = useState<string | null>(null);
+  const [integrationNotice, setIntegrationNotice] = useState<string | null>(null);
+  const [toolLookupName, setToolLookupName] = useState("");
+  const [toolLookupLoading, setToolLookupLoading] = useState(false);
+  const [docsLookupUrl, setDocsLookupUrl] = useState("");
+  const [docsLookupLoading, setDocsLookupLoading] = useState(false);
+  const [rotateDraftById, setRotateDraftById] = useState<Record<string, string>>(
+    {}
+  );
+  useEffect(() => {
+    if (!nodeId) return;
+    const controller = new AbortController();
+
+    void (async () => {
+      setIntegrationLoading(true);
+      setIntegrationError(null);
+      setIntegrationNotice(null);
+      try {
+        const res = await fetch(
+          `/api/node-integrations?nodeId=${encodeURIComponent(nodeId)}`,
+          {
+            signal: controller.signal,
+          }
+        );
+        const json: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof (json as { error: unknown }).error === "string"
+              ? (json as { error: string }).error
+              : `HTTP ${res.status}`;
+          setIntegrationError(msg);
+          return;
+        }
+        const list =
+          json &&
+          typeof json === "object" &&
+          "integrations" in json &&
+          Array.isArray((json as { integrations?: unknown }).integrations)
+            ? ((json as { integrations: NodeApiIntegration[] }).integrations ?? [])
+            : [];
+        const setupMessage =
+          json &&
+          typeof json === "object" &&
+          "setupMessage" in json &&
+          typeof (json as { setupMessage?: unknown }).setupMessage === "string"
+            ? (json as { setupMessage: string }).setupMessage
+            : null;
+        setIntegrationNotice(setupMessage);
+        setNodeIntegrations(nodeId, list);
+      } catch {
+        if (controller.signal.aborted) return;
+        setIntegrationError("Could not load node integrations.");
+      } finally {
+        if (!controller.signal.aborted) setIntegrationLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [nodeId, setNodeIntegrations]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setToolLookupName("");
+    setDocsLookupUrl("");
+    setRotateDraftById({});
+  }, [nodeId]);
+
+  const addIntegration = useCallback(() => {
+    if (!nodeId) return Promise.resolve();
+    const trimmedName = integrationName.trim();
+    if (trimmedName.length === 0) return Promise.resolve();
+
+    return (async () => {
+      setIntegrationLoading(true);
+      setIntegrationError(null);
+      try {
+        const res = await fetch("/api/node-integrations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeId,
+            name: trimmedName,
+            baseUrl: integrationBaseUrl.trim(),
+            auth: integrationAuth,
+            notes: integrationNotes.trim(),
+            credential: integrationCredential.trim(),
+          }),
+        });
+        const json: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof (json as { error: unknown }).error === "string"
+              ? (json as { error: string }).error
+              : `HTTP ${res.status}`;
+          setIntegrationError(msg);
+          return;
+        }
+        const integration =
+          json &&
+          typeof json === "object" &&
+          "integration" in json &&
+          (json as { integration?: unknown }).integration &&
+          typeof (json as { integration?: unknown }).integration === "object"
+            ? ((json as { integration: NodeApiIntegration }).integration as NodeApiIntegration)
+            : null;
+        if (!integration) return;
+        setNodeIntegrations(nodeId, [...nodeIntegrations, integration]);
+        setIntegrationName("");
+        setIntegrationBaseUrl("");
+        setIntegrationAuth("unknown");
+        setIntegrationNotes("");
+        setIntegrationCredential("");
+      } catch {
+        setIntegrationError("Could not create integration.");
+      } finally {
+        setIntegrationLoading(false);
+      }
+    })();
+  }, [
+    integrationAuth,
+    integrationBaseUrl,
+    integrationCredential,
+    integrationName,
+    integrationNotes,
+    nodeId,
+    nodeIntegrations,
+    setNodeIntegrations,
+  ]);
+
+  const autofillIntegration = useCallback(() => {
+    const query = toolLookupName.trim();
+    if (!query) return Promise.resolve();
+
+    return (async () => {
+      setToolLookupLoading(true);
+      setIntegrationError(null);
+      try {
+        const res = await fetch("/api/integrations/lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: query }),
+        });
+        const json: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof (json as { error: unknown }).error === "string"
+              ? (json as { error: string }).error
+              : `HTTP ${res.status}`;
+          setIntegrationError(msg);
+          return;
+        }
+
+        const integration =
+          json &&
+          typeof json === "object" &&
+          "integration" in json &&
+          (json as { integration?: unknown }).integration &&
+          typeof (json as { integration?: unknown }).integration === "object"
+            ? ((json as {
+                integration: {
+                  name?: unknown;
+                  baseUrl?: unknown;
+                  auth?: unknown;
+                  notes?: unknown;
+                };
+              }).integration as {
+                name?: unknown;
+                baseUrl?: unknown;
+                auth?: unknown;
+                notes?: unknown;
+              })
+            : null;
+        if (!integration) return;
+
+        if (typeof integration.name === "string") setIntegrationName(integration.name);
+        if (typeof integration.baseUrl === "string")
+          setIntegrationBaseUrl(integration.baseUrl);
+        if (
+          integration.auth === "api_key" ||
+          integration.auth === "oauth" ||
+          integration.auth === "unknown"
+        ) {
+          setIntegrationAuth(integration.auth);
+        }
+        if (typeof integration.notes === "string") setIntegrationNotes(integration.notes);
+      } catch {
+        setIntegrationError("Could not autofill integration details.");
+      } finally {
+        setToolLookupLoading(false);
+      }
+    })();
+  }, [toolLookupName]);
+
+  const rotateIntegrationSecret = useCallback(
+    (integrationId: string) => {
+      if (!nodeId) return Promise.resolve();
+      const draft = (rotateDraftById[integrationId] ?? "").trim();
+      if (!draft) return Promise.resolve();
+
+      return (async () => {
+        setIntegrationLoading(true);
+        setIntegrationError(null);
+        try {
+          const res = await fetch(`/api/node-integrations/${integrationId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ credential: draft }),
+          });
+          const json: unknown = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const msg =
+              json &&
+              typeof json === "object" &&
+              "error" in json &&
+              typeof (json as { error: unknown }).error === "string"
+                ? (json as { error: string }).error
+                : `HTTP ${res.status}`;
+            setIntegrationError(msg);
+            return;
+          }
+
+          const updated =
+            json &&
+            typeof json === "object" &&
+            "integration" in json &&
+            (json as { integration?: unknown }).integration &&
+            typeof (json as { integration?: unknown }).integration === "object"
+              ? ((json as { integration: NodeApiIntegration }).integration as NodeApiIntegration)
+              : null;
+          if (!updated) return;
+
+          setNodeIntegrations(
+            nodeId,
+            nodeIntegrations.map((row) =>
+              row.id === integrationId ? { ...row, ...updated } : row
+            )
+          );
+          setRotateDraftById((prev) => ({ ...prev, [integrationId]: "" }));
+        } catch {
+          setIntegrationError("Could not rotate secret.");
+        } finally {
+          setIntegrationLoading(false);
+        }
+      })();
+    },
+    [nodeId, nodeIntegrations, rotateDraftById, setNodeIntegrations]
+  );
+
+  const autofillFromDocsUrl = useCallback(() => {
+    const input = docsLookupUrl.trim();
+    if (!input) return Promise.resolve();
+
+    return (async () => {
+      setDocsLookupLoading(true);
+      setIntegrationError(null);
+      try {
+        const res = await fetch("/api/integrations/autofill-from-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: input }),
+        });
+        const json: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof (json as { error: unknown }).error === "string"
+              ? (json as { error: string }).error
+              : `HTTP ${res.status}`;
+          setIntegrationError(msg);
+          return;
+        }
+
+        const integration =
+          json &&
+          typeof json === "object" &&
+          "integration" in json &&
+          (json as { integration?: unknown }).integration &&
+          typeof (json as { integration?: unknown }).integration === "object"
+            ? ((json as {
+                integration: {
+                  name?: unknown;
+                  baseUrl?: unknown;
+                  auth?: unknown;
+                  notes?: unknown;
+                };
+              }).integration as {
+                name?: unknown;
+                baseUrl?: unknown;
+                auth?: unknown;
+                notes?: unknown;
+              })
+            : null;
+        if (!integration) return;
+
+        if (typeof integration.name === "string") setIntegrationName(integration.name);
+        if (typeof integration.baseUrl === "string")
+          setIntegrationBaseUrl(integration.baseUrl);
+        if (
+          integration.auth === "api_key" ||
+          integration.auth === "oauth" ||
+          integration.auth === "unknown"
+        ) {
+          setIntegrationAuth(integration.auth);
+        }
+        if (typeof integration.notes === "string") setIntegrationNotes(integration.notes);
+      } catch {
+        setIntegrationError("Could not auto-fill from docs URL.");
+      } finally {
+        setDocsLookupLoading(false);
+      }
+    })();
+  }, [docsLookupUrl]);
+
+  const removeIntegration = useCallback(
+    (integrationId: string) => {
+      if (!nodeId) return;
+      void (async () => {
+        setIntegrationLoading(true);
+        setIntegrationError(null);
+        try {
+          const res = await fetch(`/api/node-integrations/${integrationId}`, {
+            method: "DELETE",
+          });
+          const json: unknown = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const msg =
+              json &&
+              typeof json === "object" &&
+              "error" in json &&
+              typeof (json as { error: unknown }).error === "string"
+                ? (json as { error: string }).error
+                : `HTTP ${res.status}`;
+            setIntegrationError(msg);
+            return;
+          }
+          setNodeIntegrations(
+            nodeId,
+            nodeIntegrations.filter((x) => x.id !== integrationId)
+          );
+        } catch {
+          setIntegrationError("Could not delete integration.");
+        } finally {
+          setIntegrationLoading(false);
+        }
+      })();
+    },
+    [nodeId, nodeIntegrations, setNodeIntegrations]
+  );
 
   const core = snapshot?.core_summary?.trim();
   const systemPrompt = snapshot?.system_prompt?.trim();
 
   return (
-    <PaneCard paneId="context" title="Context" eyebrow={`Node · ${nodeTitle}`}>
+    <PaneCard
+      paneId="context"
+      title="Context"
+      eyebrow={`Node · ${nodeTitle}`}
+      className="h-full"
+    >
       {sync.loading ? (
         <p className="text-muted-foreground">Loading node context…</p>
       ) : null}
@@ -222,6 +600,194 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
               </ul>
             )}
           </div>
+          <div className="mt-4 space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Node APIs
+            </p>
+            {integrationLoading ? (
+              <p className="text-xs text-muted-foreground">Syncing integrations…</p>
+            ) : null}
+            {integrationError ? (
+              <p className="text-xs text-destructive">{integrationError}</p>
+            ) : null}
+            {integrationNotice ? (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {integrationNotice}
+              </p>
+            ) : null}
+            {nodeIntegrations.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No API integrations attached to this node yet.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {nodeIntegrations.map((integration) => (
+                  <li
+                    key={integration.id}
+                    className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-foreground">
+                          {integration.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          auth: {integration.auth}
+                          {integration.baseUrl
+                            ? ` · ${integration.baseUrl}`
+                            : ""}
+                          {integration.hasSecret
+                            ? ` · secret ${integration.secretHint ?? "set"}`
+                            : " · no secret"}
+                          {integration.inherited
+                            ? ` · inherited from ${integration.sourceNodeTitle ?? integration.sourceNodeId ?? "parent"}`
+                            : ""}
+                        </p>
+                      </div>
+                      {integration.inherited ? null : (
+                        <button
+                          type="button"
+                          onClick={() => removeIntegration(integration.id)}
+                          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    {integration.notes ? (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {integration.notes}
+                      </p>
+                    ) : null}
+                    {integration.inherited ? null : (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <input
+                          type="password"
+                          value={rotateDraftById[integration.id] ?? ""}
+                          onChange={(e) =>
+                            setRotateDraftById((prev) => ({
+                              ...prev,
+                              [integration.id]: e.target.value.slice(0, 4000),
+                            }))
+                          }
+                          placeholder="New secret / API key"
+                          className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void rotateIntegrationSecret(integration.id)}
+                          disabled={
+                            integrationLoading ||
+                            (rotateDraftById[integration.id] ?? "").trim().length === 0
+                          }
+                        >
+                          Rotate secret
+                        </Button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/10 p-3">
+              <p className="text-xs font-medium text-foreground">Add API to node</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={toolLookupName}
+                  onChange={(e) => setToolLookupName(e.target.value.slice(0, 120))}
+                  placeholder="Quick fill by tool name (e.g. Hevy)"
+                  className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void autofillIntegration()}
+                  disabled={toolLookupLoading || toolLookupName.trim().length === 0}
+                >
+                  {toolLookupLoading ? "Looking up…" : "Auto-fill"}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={docsLookupUrl}
+                  onChange={(e) => setDocsLookupUrl(e.target.value.slice(0, 700))}
+                  placeholder="Or paste API docs URL (best-effort auto-fill)"
+                  className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void autofillFromDocsUrl()}
+                  disabled={docsLookupLoading || docsLookupUrl.trim().length === 0}
+                >
+                  {docsLookupLoading ? "Reading docs…" : "Fill from URL"}
+                </Button>
+              </div>
+              <input
+                value={integrationName}
+                onChange={(e) => setIntegrationName(e.target.value.slice(0, 120))}
+                placeholder="Integration name (e.g. Hevy)"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              />
+              <input
+                value={integrationBaseUrl}
+                onChange={(e) => setIntegrationBaseUrl(e.target.value.slice(0, 400))}
+                placeholder="Base URL or docs URL"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              />
+              <select
+                value={integrationAuth}
+                onChange={(e) =>
+                  setIntegrationAuth(
+                    e.target.value as NodeApiIntegration["auth"]
+                  )
+                }
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <option value="unknown">Auth type: unknown</option>
+                <option value="api_key">Auth type: API key</option>
+                <option value="oauth">Auth type: OAuth</option>
+              </select>
+              <textarea
+                value={integrationNotes}
+                onChange={(e) => setIntegrationNotes(e.target.value.slice(0, 500))}
+                placeholder="Notes for this API (what data to pull, how to use it)"
+                rows={3}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              />
+              <input
+                type="password"
+                value={integrationCredential}
+                onChange={(e) =>
+                  setIntegrationCredential(e.target.value.slice(0, 4000))
+                }
+                placeholder="Credential / API key (stored encrypted server-side)"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              />
+              <p className="text-[0.72rem] leading-snug text-muted-foreground">
+                Secrets are sent to server routes and encrypted before storage. They are never shown back in full.
+              </p>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void addIntegration()}
+                  disabled={
+                    !nodeId ||
+                    integrationLoading ||
+                    integrationName.trim().length === 0
+                  }
+                >
+                  Add API
+                </Button>
+              </div>
+            </div>
+          </div>
         </>
       )}
     </PaneCard>
@@ -266,6 +832,7 @@ type PlanDraft = {
   next_actions_markdown: string;
   risks_markdown: string;
 };
+const EMPTY_NODE_INTEGRATIONS: NodeApiIntegration[] = [];
 
 export function QuestionsPane() {
   const nodeId = useNodeStore((s) => s.selectedNodeId);
@@ -483,6 +1050,7 @@ export function QuestionsPane() {
       paneId="questions"
       title="Questions"
       eyebrow={`Onboarding · ${nodeTitle}`}
+      className="h-full"
       contentClassName="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-5 py-4 text-[0.95rem]"
     >
       {!nodeId ? (
@@ -592,7 +1160,6 @@ export function PlanPane() {
   );
   const [diagramLoading, setDiagramLoading] = useState(false);
   const autoSigRef = useRef<string>("");
-
   const contextSignature = useMemo(
     () =>
       JSON.stringify({

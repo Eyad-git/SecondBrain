@@ -12,6 +12,7 @@ import { googleGenerativeAiModelId } from "@/lib/ai/google-generative-model";
 import { stringifyUserUiMessages } from "@/lib/chat/extract-user-text-from-ui";
 import { buildGraphSystemAugmentation } from "@/lib/chat/graph-chat-context";
 import { baseAssistantInstructions } from "@/lib/chat/system-instructions";
+import { listEffectiveIntegrationsForNodes } from "@/lib/integrations/effective-node-integrations";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { fetchPublicPageTool } from "@/lib/tools/fetch-public-page-tool";
 import { suggestIntegrationsTool } from "@/lib/tools/suggest-integrations-tool";
@@ -58,10 +59,48 @@ export async function POST(req: Request) {
         "Prefer summarizing tool output and mention fetch failures honestly.",
       ].join(" ");
 
+    const integrationNodeIds = [
+      ...new Set((body.mentionNodeIds ?? []).filter(Boolean)),
+    ];
+    let integrationBlock = "";
+    if (integrationNodeIds.length > 0) {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) {
+        try {
+          const integrationsByNode = await listEffectiveIntegrationsForNodes(
+            supabase,
+            user.id,
+            integrationNodeIds
+          );
+          const lines = integrationNodeIds.flatMap((nodeId) =>
+            (integrationsByNode[nodeId] ?? []).map((x) => {
+              const inheritedLabel = x.inherited
+                ? ` (inherited from ${x.sourceNodeTitle ?? x.sourceNodeId})`
+                : "";
+              return `- node=${nodeId} | ${x.name}${inheritedLabel} | auth=${x.auth} | base=${x.baseUrl || "(none)"} | notes=${x.notes || "(none)"} | secret=${x.secretHint || "none"}`;
+            })
+          );
+          if (lines.length > 0) {
+            integrationBlock = [
+              "## Node API integrations (effective metadata)",
+              ...lines,
+            ].join("\n");
+          }
+        } catch (integrationErr) {
+          const message =
+            integrationErr instanceof Error ? integrationErr.message : "unknown";
+          console.error("[api/chat] node_api_integrations:", message);
+        }
+      }
+    }
+
     const system = [
       core,
       baseAssistantInstructions({ allowIntegrationSuggestions: true }),
       graphBlock,
+      integrationBlock,
       `(Tools) ${toolsInstructions}`,
       graphBlock
         ? ""

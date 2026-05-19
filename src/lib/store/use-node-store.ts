@@ -1,12 +1,14 @@
 import { create } from "zustand";
 
 import { pickDefaultSelectedId } from "@/lib/nodes/tree";
-import type { NodeRowSnapshot } from "@/types/nodes";
+import type { NodeApiIntegration, NodeRowSnapshot } from "@/types/nodes";
 
 export type WorkspaceNodeStore = {
   selectedNodeId: string | null;
   setSelectedNodeId: (id: string | null) => void;
   nodesById: Record<string, NodeRowSnapshot>;
+  integrationsByNodeId: Record<string, NodeApiIntegration[]>;
+  setNodeIntegrations: (nodeId: string, integrations: NodeApiIntegration[]) => void;
   syncNodesFromRows: (rows: NodeRowSnapshot[]) => void;
   /** Replace merged snapshot after a targeted fetch (fresh `core_summary`, onboarding, etc.). */
   mergeNodeSnapshot: (row: NodeRowSnapshot) => void;
@@ -27,10 +29,19 @@ export type WorkspaceNodeStore = {
   resetWorkspace: () => void;
 };
 
-export const useNodeStore = create<WorkspaceNodeStore>((set, get) => ({
+export const useNodeStore = create<WorkspaceNodeStore>((set) => ({
   selectedNodeId: null,
   nodesById: {},
+  integrationsByNodeId: {},
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
+
+  setNodeIntegrations: (nodeId, integrations) =>
+    set((state) => ({
+      integrationsByNodeId: {
+        ...state.integrationsByNodeId,
+        [nodeId]: integrations,
+      },
+    })),
 
   mergeNodeSnapshot: (row) =>
     set((state) => ({
@@ -70,6 +81,7 @@ export const useNodeStore = create<WorkspaceNodeStore>((set, get) => ({
     set({
       selectedNodeId: null,
       nodesById: {},
+      integrationsByNodeId: {},
     }),
 }));
 

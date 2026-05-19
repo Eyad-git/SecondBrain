@@ -3,6 +3,19 @@
 export type NodeLevel = "account" | "domain" | "project" | "task";
 export type NodeStatus = "onboarding" | "active";
 
+export type NodeApiIntegration = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  auth: "api_key" | "oauth" | "unknown";
+  notes: string;
+  hasSecret?: boolean;
+  secretHint?: string | null;
+  sourceNodeId?: string;
+  sourceNodeTitle?: string | null;
+  inherited?: boolean;
+};
+
 export type NodeRowSnapshot = {
   id: string;
   title: string;

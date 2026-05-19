@@ -6,6 +6,7 @@ import { z } from "zod";
 import { googleGenerativeAiModelId } from "@/lib/ai/google-generative-model";
 import { buildGraphSystemAugmentation } from "@/lib/chat/graph-chat-context";
 import { baseAssistantInstructions } from "@/lib/chat/system-instructions";
+import { listEffectiveIntegrationsForNodes } from "@/lib/integrations/effective-node-integrations";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -71,6 +72,34 @@ export async function POST(req: Request) {
       extraNodeIds: [nodeId],
     });
 
+    let nodeIntegrations: Array<{
+      name: string;
+      auth: "api_key" | "oauth" | "unknown";
+      baseUrl: string;
+      notes: string;
+      secretHint: string | null;
+      inherited: boolean;
+      sourceNodeId: string;
+      sourceNodeTitle: string | null;
+    }> = [];
+    try {
+      const byNode = await listEffectiveIntegrationsForNodes(supabase, user.id, [nodeId]);
+      nodeIntegrations = (byNode[nodeId] ?? []).map((x) => ({
+        name: x.name,
+        auth: x.auth,
+        baseUrl: x.baseUrl,
+        notes: x.notes,
+        secretHint: x.secretHint,
+        inherited: x.inherited,
+        sourceNodeId: x.sourceNodeId,
+        sourceNodeTitle: x.sourceNodeTitle,
+      }));
+    } catch (integrationsErr) {
+      const message =
+        integrationsErr instanceof Error ? integrationsErr.message : "unknown";
+      console.error("[api/plan] node_api_integrations:", message);
+    }
+
     const prompt = [
       "Create a practical living plan for this node.",
       `Node title: ${node.title ?? "Untitled node"}`,
@@ -79,6 +108,15 @@ export async function POST(req: Request) {
       node.system_prompt ? `System prompt:\n${node.system_prompt}` : "",
       node.core_summary ? `Core summary:\n${node.core_summary}` : "",
       graphBlock ? `Graph context:\n${graphBlock}` : "",
+      nodeIntegrations.length > 0
+        ? [
+            "Node API integrations (effective, including inherited):",
+            ...nodeIntegrations.map(
+              (x) =>
+                `- ${x.name} (${x.auth})${x.inherited ? ` inherited from ${x.sourceNodeTitle ?? x.sourceNodeId}` : ""} base=${x.baseUrl || "(none)"} notes=${x.notes || "(none)"} secret=${x.secretHint || "none"}`
+            ),
+          ].join("\n")
+        : "",
       reason ? `Refresh reason: ${reason}` : "",
     ]
       .filter(Boolean)
