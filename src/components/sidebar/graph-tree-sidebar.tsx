@@ -22,11 +22,13 @@ function NodeRow({
   depth,
   collapsedById,
   onToggleCollapse,
+  onNodeSelected,
 }: {
   node: TreeNode;
   depth: number;
   collapsedById: Record<string, boolean>;
   onToggleCollapse: (nodeId: string) => void;
+  onNodeSelected?: () => void;
 }) {
   const selectedNodeId = useNodeStore((s) => s.selectedNodeId);
   const setSelectedNodeId = useNodeStore((s) => s.setSelectedNodeId);
@@ -39,7 +41,10 @@ function NodeRow({
       <div className="flex flex-col gap-1">
         <button
           type="button"
-          onClick={() => setSelectedNodeId(node.id)}
+          onClick={() => {
+            setSelectedNodeId(node.id);
+            onNodeSelected?.();
+          }}
           className={cn(
             "flex w-full items-start rounded-md px-2 py-1.5 text-left text-sm transition-colors",
             "hover:bg-muted/80 hover:text-foreground",
@@ -86,6 +91,7 @@ function NodeRow({
             depth={depth + 1}
             collapsedById={collapsedById}
             onToggleCollapse={onToggleCollapse}
+            onNodeSelected={onNodeSelected}
           />
         ) : null}
       </div>
@@ -98,11 +104,13 @@ function TreeList({
   depth,
   collapsedById,
   onToggleCollapse,
+  onNodeSelected,
 }: {
   nodes: TreeNode[];
   depth: number;
   collapsedById: Record<string, boolean>;
   onToggleCollapse: (nodeId: string) => void;
+  onNodeSelected?: () => void;
 }) {
   return (
     <ul className="space-y-1">
@@ -113,13 +121,20 @@ function TreeList({
           depth={depth}
           collapsedById={collapsedById}
           onToggleCollapse={onToggleCollapse}
+          onNodeSelected={onNodeSelected}
         />
       ))}
     </ul>
   );
 }
 
-export function DashboardSidebar() {
+export function DashboardSidebar({
+  className,
+  onNodeSelected,
+}: {
+  className?: string;
+  onNodeSelected?: () => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -251,7 +266,12 @@ export function DashboardSidebar() {
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <aside
+      className={cn(
+        "flex w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+        className
+      )}
+    >
       <div className="flex flex-wrap items-start justify-between gap-2 border-b border-sidebar-border px-4 py-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
@@ -296,6 +316,7 @@ export function DashboardSidebar() {
             depth={0}
             collapsedById={collapsedById}
             onToggleCollapse={toggleNodeCollapsed}
+            onNodeSelected={onNodeSelected}
           />
         )}
       </nav>

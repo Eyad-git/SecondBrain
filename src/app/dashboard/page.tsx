@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 export default function DashboardPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-6 py-3">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-6 py-3 pl-14 md:pl-6">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             Workspace
