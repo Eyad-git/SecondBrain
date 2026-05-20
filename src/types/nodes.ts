@@ -16,6 +16,18 @@ export type NodeApiIntegration = {
   inherited?: boolean;
 };
 
+export type NodeScrapedSite = {
+  id: string;
+  nodeId: string;
+  url: string;
+  fetchedUrl: string;
+  title: string | null;
+  contentExcerpt: string;
+  contentType: string | null;
+  bytesRead: number;
+  createdAt: string;
+};
+
 export type NodeRowSnapshot = {
   id: string;
   title: string;

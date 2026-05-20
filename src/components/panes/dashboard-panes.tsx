@@ -14,37 +14,59 @@ import {
   useNodeStore,
   useSelectedNodeTitle,
 } from "@/lib/store/use-node-store";
-import type { NodeApiIntegration, NodeStatus } from "@/types/nodes";
+import type {
+  NodeApiIntegration,
+  NodeScrapedSite,
+  NodeStatus,
+} from "@/types/nodes";
 
 const PANE_COLLAPSE_PREFIX = "sb.dashboard.pane.";
+const CONTEXT_SECTION_COLLAPSE_PREFIX = "sb.dashboard.context.section.";
 
-function usePersistedPaneCollapsed(paneId: string) {
-  const [collapsed, setCollapsed] = useState(false);
+function usePersistedCollapse(storageKey: string, defaultCollapsed = false) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
   useEffect(() => {
     try {
-      if (localStorage.getItem(PANE_COLLAPSE_PREFIX + paneId) === "1") {
+      const raw = localStorage.getItem(storageKey);
+      if (raw === "1") {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setCollapsed(true);
+      } else if (raw === "0") {
+        setCollapsed(false);
       }
     } catch {
       /* ignore */
     }
-  }, [paneId]);
+  }, [defaultCollapsed, storageKey]);
 
   const toggle = useCallback(() => {
     setCollapsed((c) => {
       const next = !c;
       try {
-        localStorage.setItem(PANE_COLLAPSE_PREFIX + paneId, next ? "1" : "0");
+        localStorage.setItem(storageKey, next ? "1" : "0");
       } catch {
         /* ignore */
       }
       return next;
     });
-  }, [paneId]);
+  }, [storageKey]);
 
   return { collapsed, toggle };
+}
+
+function usePersistedPaneCollapsed(paneId: string) {
+  return usePersistedCollapse(PANE_COLLAPSE_PREFIX + paneId);
+}
+
+function usePersistedContextSectionCollapsed(
+  sectionId: string,
+  defaultCollapsed = false
+) {
+  return usePersistedCollapse(
+    CONTEXT_SECTION_COLLAPSE_PREFIX + sectionId,
+    defaultCollapsed
+  );
 }
 
 function PaneCard({
@@ -146,6 +168,236 @@ function InfluenceRow({ link }: { link: LinkedInfluence }) {
   );
 }
 
+function ContextSection({
+  sectionId,
+  title,
+  collapsed,
+  onToggle,
+  action,
+  children,
+}: {
+  sectionId: string;
+  title: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-4 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center gap-1.5 rounded-sm text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          aria-expanded={!collapsed}
+          aria-controls={`context-section-${sectionId}`}
+        >
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", collapsed && "-rotate-90")}
+            aria-hidden
+          />
+          <span>{title}</span>
+        </button>
+        {action}
+      </div>
+      <div id={`context-section-${sectionId}`} className={cn(collapsed && "hidden")}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function parseStructuredScrape(
+  excerpt: string
+): {
+  source: string | null;
+  title: string | null;
+  integration: string | null;
+  confidence: "High" | "Medium" | "Low" | null;
+  summary: string;
+  keyPoints: string[];
+  targetRelevance: string[];
+  confidenceRationale: string[];
+} {
+  const lines = excerpt.split(/\r?\n/).map((line) => line.trim());
+  const source =
+    lines.find((line) => line.toLowerCase().startsWith("source:"))?.slice(7).trim() ??
+    null;
+  const title =
+    lines.find((line) => line.toLowerCase().startsWith("title:"))?.slice(6).trim() ??
+    null;
+  const integration =
+    lines
+      .find((line) => line.toLowerCase().startsWith("integration:"))
+      ?.slice(12)
+      .trim() ?? null;
+  const confidenceRaw =
+    lines
+      .find((line) => line.toLowerCase().startsWith("confidence:"))
+      ?.slice(11)
+      .trim() ?? null;
+  const confidence =
+    confidenceRaw === "High" || confidenceRaw === "Medium" || confidenceRaw === "Low"
+      ? confidenceRaw
+      : null;
+
+  const summaryStart = lines.findIndex(
+    (line) => line.toLowerCase() === "summary:"
+  );
+  const keyStart = lines.findIndex(
+    (line) => line.toLowerCase() === "key points:"
+  );
+  const targetStart = lines.findIndex(
+    (line) => line.toLowerCase() === "target relevance:"
+  );
+  const confidenceRationaleStart = lines.findIndex(
+    (line) => line.toLowerCase() === "confidence rationale:"
+  );
+
+  const summaryLines =
+    summaryStart >= 0
+      ? lines
+          .slice(summaryStart + 1, keyStart > summaryStart ? keyStart : lines.length)
+          .filter((line) => line.length > 0)
+      : [];
+  const keyLines =
+    keyStart >= 0
+      ? lines
+          .slice(
+            keyStart + 1,
+            targetStart > keyStart
+              ? targetStart
+              : confidenceRationaleStart > keyStart
+                ? confidenceRationaleStart
+                : lines.length
+          )
+          .filter((line) => line.startsWith("- "))
+          .map((line) => line.slice(2))
+      : [];
+  const targetLines =
+    targetStart >= 0
+      ? lines
+          .slice(
+            targetStart + 1,
+            confidenceRationaleStart > targetStart
+              ? confidenceRationaleStart
+              : lines.length
+          )
+          .filter((line) => line.startsWith("- "))
+          .map((line) => line.slice(2))
+      : [];
+  const confidenceRationale =
+    confidenceRationaleStart >= 0
+      ? lines
+          .slice(confidenceRationaleStart + 1)
+          .filter((line) => line.startsWith("- "))
+          .map((line) => line.slice(2))
+      : [];
+
+  return {
+    source,
+    title,
+    integration,
+    confidence,
+    summary: summaryLines.join(" ").trim(),
+    keyPoints: keyLines,
+    targetRelevance: targetLines,
+    confidenceRationale,
+  };
+}
+
+function ScrapedSiteCard({ site }: { site: NodeScrapedSite }) {
+  const parsed = parseStructuredScrape(site.contentExcerpt);
+  const heading = parsed.title?.trim() || site.title?.trim() || site.url;
+  const confidenceTone =
+    parsed.confidence === "High"
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+      : parsed.confidence === "Medium"
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+        : parsed.confidence === "Low"
+          ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+          : "bg-muted text-muted-foreground";
+
+  return (
+    <details className="group rounded-lg border border-border/70 bg-muted/15 px-3 py-2 open:bg-muted/25">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">{heading}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {parsed.source || site.fetchedUrl || site.url}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {parsed.confidence ? (
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                confidenceTone
+              )}
+            >
+              {parsed.confidence}
+            </span>
+          ) : null}
+          <ChevronDown className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+        </div>
+      </summary>
+      <div className="mt-3 space-y-2 border-t border-border/60 pt-3 text-xs">
+        {parsed.integration ? (
+          <p className="text-muted-foreground">
+            <span className="font-semibold text-foreground">Integration:</span>{" "}
+            {parsed.integration}
+          </p>
+        ) : null}
+        {parsed.summary ? (
+          <div>
+            <p className="font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Summary
+            </p>
+            <p className="mt-1 text-foreground">{parsed.summary}</p>
+          </div>
+        ) : null}
+        {parsed.keyPoints.length > 0 ? (
+          <div>
+            <p className="font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Key points
+            </p>
+            <ul className="mt-1 space-y-1 text-foreground">
+              {parsed.keyPoints.map((point) => (
+                <li key={point}>- {point}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {parsed.targetRelevance.length > 0 ? (
+          <div>
+            <p className="font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Target relevance
+            </p>
+            <ul className="mt-1 space-y-1 text-foreground">
+              {parsed.targetRelevance.map((point) => (
+                <li key={point}>- {point}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {parsed.confidenceRationale.length > 0 ? (
+          <div>
+            <p className="font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Confidence rationale
+            </p>
+            <ul className="mt-1 space-y-1 text-foreground">
+              {parsed.confidenceRationale.map((point) => (
+                <li key={point}>- {point}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const nodeId = useNodeStore((s) => s.selectedNodeId);
   const snapshot = useNodeStore((s) =>
@@ -157,7 +409,11 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
       ? (s.integrationsByNodeId[nodeId] ?? EMPTY_NODE_INTEGRATIONS)
       : EMPTY_NODE_INTEGRATIONS
   );
+  const nodeScrapedSites = useNodeStore((s) =>
+    nodeId ? (s.scrapedSitesByNodeId[nodeId] ?? EMPTY_NODE_SCRAPED_SITES) : EMPTY_NODE_SCRAPED_SITES
+  );
   const setNodeIntegrations = useNodeStore((s) => s.setNodeIntegrations);
+  const setNodeScrapedSites = useNodeStore((s) => s.setNodeScrapedSites);
   const [integrationName, setIntegrationName] = useState("");
   const [integrationBaseUrl, setIntegrationBaseUrl] = useState("");
   const [integrationAuth, setIntegrationAuth] = useState<
@@ -168,6 +424,12 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const [integrationLoading, setIntegrationLoading] = useState(false);
   const [integrationError, setIntegrationError] = useState<string | null>(null);
   const [integrationNotice, setIntegrationNotice] = useState<string | null>(null);
+  const [scrapedSitesLoading, setScrapedSitesLoading] = useState(false);
+  const [scrapedSitesError, setScrapedSitesError] = useState<string | null>(null);
+  const [scrapedSitesNotice, setScrapedSitesNotice] = useState<string | null>(null);
+  const [scrapedConfidenceFilter, setScrapedConfidenceFilter] = useState<
+    "all" | "medium_plus" | "high"
+  >("all");
   const [toolLookupName, setToolLookupName] = useState("");
   const [toolLookupLoading, setToolLookupLoading] = useState(false);
   const [docsLookupUrl, setDocsLookupUrl] = useState("");
@@ -228,6 +490,60 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
 
     return () => controller.abort();
   }, [nodeId, setNodeIntegrations]);
+
+  useEffect(() => {
+    if (!nodeId) return;
+    const controller = new AbortController();
+
+    void (async () => {
+      setScrapedSitesLoading(true);
+      setScrapedSitesError(null);
+      setScrapedSitesNotice(null);
+      try {
+        const res = await fetch(
+          `/api/node-scraped-sites?nodeId=${encodeURIComponent(nodeId)}`,
+          { signal: controller.signal }
+        );
+        const json: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof (json as { error: unknown }).error === "string"
+              ? (json as { error: string }).error
+              : `HTTP ${res.status}`;
+          setScrapedSitesError(msg);
+          return;
+        }
+
+        const list =
+          json &&
+          typeof json === "object" &&
+          "scrapedSites" in json &&
+          Array.isArray((json as { scrapedSites?: unknown }).scrapedSites)
+            ? ((json as { scrapedSites: typeof EMPTY_NODE_SCRAPED_SITES }).scrapedSites ?? [])
+            : [];
+        const setupMessage =
+          json &&
+          typeof json === "object" &&
+          "setupMessage" in json &&
+          typeof (json as { setupMessage?: unknown }).setupMessage === "string"
+            ? (json as { setupMessage: string }).setupMessage
+            : null;
+
+        setScrapedSitesNotice(setupMessage);
+        setNodeScrapedSites(nodeId, list);
+      } catch {
+        if (controller.signal.aborted) return;
+        setScrapedSitesError("Could not load scraped sites.");
+      } finally {
+        if (!controller.signal.aborted) setScrapedSitesLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [nodeId, setNodeScrapedSites]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -528,6 +844,17 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
 
   const core = snapshot?.core_summary?.trim();
   const systemPrompt = snapshot?.system_prompt?.trim();
+  const filteredScrapedSites = nodeScrapedSites.filter((site) => {
+    if (scrapedConfidenceFilter === "all") return true;
+    const parsed = parseStructuredScrape(site.contentExcerpt);
+    if (scrapedConfidenceFilter === "high") return parsed.confidence === "High";
+    return parsed.confidence === "High" || parsed.confidence === "Medium";
+  });
+  const summarySection = usePersistedContextSectionCollapsed("summary");
+  const promptSection = usePersistedContextSectionCollapsed("system-prompt");
+  const linksSection = usePersistedContextSectionCollapsed("linked-nodes");
+  const apiSection = usePersistedContextSectionCollapsed("node-apis", true);
+  const scrapedSection = usePersistedContextSectionCollapsed("scraped-sites", true);
 
   return (
     <PaneCard
@@ -548,20 +875,30 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
         </p>
       ) : (
         <>
-          <p className="text-foreground whitespace-pre-wrap">
-            {core && core.length > 0 ? (
-              core
-            ) : (
-              <span className="text-muted-foreground italic">
-                No core summary yet for this node—answer onboarding questions or
-                chat to fill it in later.
-              </span>
-            )}
-          </p>
-          <div className="mt-4 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              System prompt
+          <ContextSection
+            sectionId="summary"
+            title="Core summary"
+            collapsed={summarySection.collapsed}
+            onToggle={summarySection.toggle}
+          >
+            <p className="text-foreground whitespace-pre-wrap">
+              {core && core.length > 0 ? (
+                core
+              ) : (
+                <span className="text-muted-foreground italic">
+                  No core summary yet for this node—answer onboarding questions or
+                  chat to fill it in later.
+                </span>
+              )}
             </p>
+          </ContextSection>
+
+          <ContextSection
+            sectionId="system-prompt"
+            title="System prompt"
+            collapsed={promptSection.collapsed}
+            onToggle={promptSection.toggle}
+          >
             {systemPrompt && systemPrompt.length > 0 ? (
               <div className="max-h-64 overflow-y-auto rounded-lg border border-border/80 bg-muted/30 px-3 py-2 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap">
                 {systemPrompt}
@@ -572,11 +909,14 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
                 or when onboarding runs.
               </p>
             )}
-          </div>
-          <div className="mt-4 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Linked nodes
-            </p>
+          </ContextSection>
+
+          <ContextSection
+            sectionId="linked-nodes"
+            title="Linked nodes"
+            collapsed={linksSection.collapsed}
+            onToggle={linksSection.toggle}
+          >
             {sync.linksError ? (
               <p className="text-xs text-destructive">{sync.linksError}</p>
             ) : null}
@@ -599,195 +939,290 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
                 ))}
               </ul>
             )}
-          </div>
-          <div className="mt-4 space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Node APIs
-            </p>
-            {integrationLoading ? (
-              <p className="text-xs text-muted-foreground">Syncing integrations…</p>
-            ) : null}
-            {integrationError ? (
-              <p className="text-xs text-destructive">{integrationError}</p>
-            ) : null}
-            {integrationNotice ? (
-              <p className="text-xs text-amber-600 dark:text-amber-400">
-                {integrationNotice}
-              </p>
-            ) : null}
-            {nodeIntegrations.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                No API integrations attached to this node yet.
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {nodeIntegrations.map((integration) => (
-                  <li
-                    key={integration.id}
-                    className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="font-medium text-foreground">
-                          {integration.name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          auth: {integration.auth}
-                          {integration.baseUrl
-                            ? ` · ${integration.baseUrl}`
-                            : ""}
-                          {integration.hasSecret
-                            ? ` · secret ${integration.secretHint ?? "set"}`
-                            : " · no secret"}
-                          {integration.inherited
-                            ? ` · inherited from ${integration.sourceNodeTitle ?? integration.sourceNodeId ?? "parent"}`
-                            : ""}
-                        </p>
-                      </div>
-                      {integration.inherited ? null : (
-                        <button
-                          type="button"
-                          onClick={() => removeIntegration(integration.id)}
-                          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                    {integration.notes ? (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {integration.notes}
-                      </p>
-                    ) : null}
-                    {integration.inherited ? null : (
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <input
-                          type="password"
-                          value={rotateDraftById[integration.id] ?? ""}
-                          onChange={(e) =>
-                            setRotateDraftById((prev) => ({
-                              ...prev,
-                              [integration.id]: e.target.value.slice(0, 4000),
-                            }))
-                          }
-                          placeholder="New secret / API key"
-                          className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void rotateIntegrationSecret(integration.id)}
-                          disabled={
-                            integrationLoading ||
-                            (rotateDraftById[integration.id] ?? "").trim().length === 0
-                          }
-                        >
-                          Rotate secret
-                        </Button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
+          </ContextSection>
 
-            <div className="space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/10 p-3">
-              <p className="text-xs font-medium text-foreground">Add API to node</p>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={toolLookupName}
-                  onChange={(e) => setToolLookupName(e.target.value.slice(0, 120))}
-                  placeholder="Quick fill by tool name (e.g. Hevy)"
-                  className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void autofillIntegration()}
-                  disabled={toolLookupLoading || toolLookupName.trim().length === 0}
-                >
-                  {toolLookupLoading ? "Looking up…" : "Auto-fill"}
-                </Button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={docsLookupUrl}
-                  onChange={(e) => setDocsLookupUrl(e.target.value.slice(0, 700))}
-                  placeholder="Or paste API docs URL (best-effort auto-fill)"
-                  className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void autofillFromDocsUrl()}
-                  disabled={docsLookupLoading || docsLookupUrl.trim().length === 0}
-                >
-                  {docsLookupLoading ? "Reading docs…" : "Fill from URL"}
-                </Button>
-              </div>
-              <input
-                value={integrationName}
-                onChange={(e) => setIntegrationName(e.target.value.slice(0, 120))}
-                placeholder="Integration name (e.g. Hevy)"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-              <input
-                value={integrationBaseUrl}
-                onChange={(e) => setIntegrationBaseUrl(e.target.value.slice(0, 400))}
-                placeholder="Base URL or docs URL"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-              <select
-                value={integrationAuth}
-                onChange={(e) =>
-                  setIntegrationAuth(
-                    e.target.value as NodeApiIntegration["auth"]
-                  )
-                }
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          <ContextSection
+            sectionId="node-apis"
+            title="Node APIs"
+            collapsed={apiSection.collapsed}
+            onToggle={apiSection.toggle}
+            action={
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={apiSection.toggle}
               >
-                <option value="unknown">Auth type: unknown</option>
-                <option value="api_key">Auth type: API key</option>
-                <option value="oauth">Auth type: OAuth</option>
-              </select>
-              <textarea
-                value={integrationNotes}
-                onChange={(e) => setIntegrationNotes(e.target.value.slice(0, 500))}
-                placeholder="Notes for this API (what data to pull, how to use it)"
-                rows={3}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-              <input
-                type="password"
-                value={integrationCredential}
-                onChange={(e) =>
-                  setIntegrationCredential(e.target.value.slice(0, 4000))
-                }
-                placeholder="Credential / API key (stored encrypted server-side)"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              />
-              <p className="text-[0.72rem] leading-snug text-muted-foreground">
-                Secrets are sent to server routes and encrypted before storage. They are never shown back in full.
-              </p>
-              <div className="flex justify-end">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => void addIntegration()}
-                  disabled={
-                    !nodeId ||
-                    integrationLoading ||
-                    integrationName.trim().length === 0
+                {apiSection.collapsed ? "Show APIs" : "Hide APIs"}
+              </Button>
+            }
+          >
+            <div className="space-y-3">
+              {integrationLoading ? (
+                <p className="text-xs text-muted-foreground">Syncing integrations…</p>
+              ) : null}
+              {integrationError ? (
+                <p className="text-xs text-destructive">{integrationError}</p>
+              ) : null}
+              {integrationNotice ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {integrationNotice}
+                </p>
+              ) : null}
+              {nodeIntegrations.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No API integrations attached to this node yet.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {nodeIntegrations.map((integration) => (
+                    <li
+                      key={integration.id}
+                      className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-foreground">
+                            {integration.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            auth: {integration.auth}
+                            {integration.baseUrl
+                              ? ` · ${integration.baseUrl}`
+                              : ""}
+                            {integration.hasSecret
+                              ? ` · secret ${integration.secretHint ?? "set"}`
+                              : " · no secret"}
+                            {integration.inherited
+                              ? ` · inherited from ${integration.sourceNodeTitle ?? integration.sourceNodeId ?? "parent"}`
+                              : ""}
+                          </p>
+                        </div>
+                        {integration.inherited ? null : (
+                          <button
+                            type="button"
+                            onClick={() => removeIntegration(integration.id)}
+                            className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                      {integration.notes ? (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {integration.notes}
+                        </p>
+                      ) : null}
+                      {integration.inherited ? null : (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <input
+                            type="password"
+                            value={rotateDraftById[integration.id] ?? ""}
+                            onChange={(e) =>
+                              setRotateDraftById((prev) => ({
+                                ...prev,
+                                [integration.id]: e.target.value.slice(0, 4000),
+                              }))
+                            }
+                            placeholder="New secret / API key"
+                            className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void rotateIntegrationSecret(integration.id)}
+                            disabled={
+                              integrationLoading ||
+                              (rotateDraftById[integration.id] ?? "").trim().length === 0
+                            }
+                          >
+                            Rotate secret
+                          </Button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/10 p-3">
+                <p className="text-xs font-medium text-foreground">Add API to node</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={toolLookupName}
+                    onChange={(e) => setToolLookupName(e.target.value.slice(0, 120))}
+                    placeholder="Quick fill by tool name (e.g. Hevy)"
+                    className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void autofillIntegration()}
+                    disabled={toolLookupLoading || toolLookupName.trim().length === 0}
+                  >
+                    {toolLookupLoading ? "Looking up…" : "Auto-fill"}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={docsLookupUrl}
+                    onChange={(e) => setDocsLookupUrl(e.target.value.slice(0, 700))}
+                    placeholder="Or paste API docs URL (best-effort auto-fill)"
+                    className="min-w-[14rem] flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void autofillFromDocsUrl()}
+                    disabled={docsLookupLoading || docsLookupUrl.trim().length === 0}
+                  >
+                    {docsLookupLoading ? "Reading docs…" : "Fill from URL"}
+                  </Button>
+                </div>
+                <input
+                  value={integrationName}
+                  onChange={(e) => setIntegrationName(e.target.value.slice(0, 120))}
+                  placeholder="Integration name (e.g. Hevy)"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <input
+                  value={integrationBaseUrl}
+                  onChange={(e) => setIntegrationBaseUrl(e.target.value.slice(0, 400))}
+                  placeholder="Base URL or docs URL"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <select
+                  value={integrationAuth}
+                  onChange={(e) =>
+                    setIntegrationAuth(
+                      e.target.value as NodeApiIntegration["auth"]
+                    )
                   }
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                 >
-                  Add API
-                </Button>
+                  <option value="unknown">Auth type: unknown</option>
+                  <option value="api_key">Auth type: API key</option>
+                  <option value="oauth">Auth type: OAuth</option>
+                </select>
+                <textarea
+                  value={integrationNotes}
+                  onChange={(e) => setIntegrationNotes(e.target.value.slice(0, 500))}
+                  placeholder="Notes for this API (what data to pull, how to use it)"
+                  rows={3}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <input
+                  type="password"
+                  value={integrationCredential}
+                  onChange={(e) =>
+                    setIntegrationCredential(e.target.value.slice(0, 4000))
+                  }
+                  placeholder="Credential / API key (stored encrypted server-side)"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                />
+                <p className="text-[0.72rem] leading-snug text-muted-foreground">
+                  Secrets are sent to server routes and encrypted before storage. They are never shown back in full.
+                </p>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void addIntegration()}
+                    disabled={
+                      !nodeId ||
+                      integrationLoading ||
+                      integrationName.trim().length === 0
+                    }
+                  >
+                    Add API
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
+          </ContextSection>
+
+          <ContextSection
+            sectionId="scraped-sites"
+            title="Scraped Sites"
+            collapsed={scrapedSection.collapsed}
+            onToggle={scrapedSection.toggle}
+            action={
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={scrapedSection.toggle}
+              >
+                {scrapedSection.collapsed ? "Scraped Sites" : "Hide Scraped"}
+              </Button>
+            }
+          >
+            <div className="space-y-2">
+              {scrapedSitesLoading ? (
+                <p className="text-xs text-muted-foreground">Loading scraped pages…</p>
+              ) : null}
+              {scrapedSitesError ? (
+                <p className="text-xs text-destructive">{scrapedSitesError}</p>
+              ) : null}
+              {scrapedSitesNotice ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {scrapedSitesNotice}
+                </p>
+              ) : null}
+              {nodeScrapedSites.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No scraped sites yet. Use <code className="text-foreground">/scrape</code> in Ask chat and follow the guided steps.
+                </p>
+              ) : (
+                <>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={scrapedConfidenceFilter === "high" ? "default" : "outline"}
+                      onClick={() => setScrapedConfidenceFilter("high")}
+                    >
+                      High only
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={
+                        scrapedConfidenceFilter === "medium_plus" ? "default" : "outline"
+                      }
+                      onClick={() => setScrapedConfidenceFilter("medium_plus")}
+                    >
+                      Medium+
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant={scrapedConfidenceFilter === "all" ? "default" : "outline"}
+                      onClick={() => setScrapedConfidenceFilter("all")}
+                    >
+                      All
+                    </Button>
+                  </div>
+                  {filteredScrapedSites.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No scraped entries match this confidence filter.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {filteredScrapedSites.map((site) => (
+                        <li key={site.id}>
+                          <ScrapedSiteCard site={site} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          </ContextSection>
         </>
       )}
     </PaneCard>
@@ -833,6 +1268,7 @@ type PlanDraft = {
   risks_markdown: string;
 };
 const EMPTY_NODE_INTEGRATIONS: NodeApiIntegration[] = [];
+const EMPTY_NODE_SCRAPED_SITES: NodeScrapedSite[] = [];
 
 export function QuestionsPane() {
   const nodeId = useNodeStore((s) => s.selectedNodeId);

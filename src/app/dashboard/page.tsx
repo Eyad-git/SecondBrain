@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { PaneGrid } from "@/components/panes/pane-grid";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <ThemeToggle />
           <SignOutButton />
           <Link
             href="/"

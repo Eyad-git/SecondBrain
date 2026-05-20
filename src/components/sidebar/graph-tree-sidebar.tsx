@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { ChatConfirmModal } from "@/components/chat/chat-confirm-modal";
 import { NewNodeDialog } from "@/components/sidebar/new-node-dialog";
@@ -14,10 +15,23 @@ import { useNodeStore } from "@/lib/store/use-node-store";
 import { cn } from "@/lib/utils";
 import type { TreeNode } from "@/types/nodes";
 
-function NodeRow({ node, depth }: { node: TreeNode; depth: number }) {
+const COLLAPSED_NODES_STORAGE_KEY = "sb.graph.collapsedNodes";
+
+function NodeRow({
+  node,
+  depth,
+  collapsedById,
+  onToggleCollapse,
+}: {
+  node: TreeNode;
+  depth: number;
+  collapsedById: Record<string, boolean>;
+  onToggleCollapse: (nodeId: string) => void;
+}) {
   const selectedNodeId = useNodeStore((s) => s.selectedNodeId);
   const setSelectedNodeId = useNodeStore((s) => s.setSelectedNodeId);
   const hasChildren = node.children.length > 0;
+  const collapsed = hasChildren && Boolean(collapsedById[node.id]);
   const isSelected = selectedNodeId === node.id;
 
   return (
@@ -35,6 +49,25 @@ function NodeRow({ node, depth }: { node: TreeNode; depth: number }) {
           )}
           style={{ paddingLeft: `${8 + depth * 12}px` }}
         >
+          {hasChildren ? (
+            <span
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onToggleCollapse(node.id);
+              }}
+              className="mr-1 inline-flex rounded text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              aria-hidden
+            >
+              {collapsed ? (
+                <ChevronRight className="size-3.5" aria-hidden />
+              ) : (
+                <ChevronDown className="size-3.5" aria-hidden />
+              )}
+            </span>
+          ) : (
+            <span className="mr-2 inline-block size-3.5 shrink-0" aria-hidden />
+          )}
           <span
             className={cn(
               "mr-2 mt-1.5 inline-block size-2 shrink-0 rounded-full",
@@ -47,19 +80,40 @@ function NodeRow({ node, depth }: { node: TreeNode; depth: number }) {
             {node.node_level}
           </span>
         </button>
-        {hasChildren ? (
-          <TreeList nodes={node.children} depth={depth + 1} />
+        {hasChildren && !collapsed ? (
+          <TreeList
+            nodes={node.children}
+            depth={depth + 1}
+            collapsedById={collapsedById}
+            onToggleCollapse={onToggleCollapse}
+          />
         ) : null}
       </div>
     </li>
   );
 }
 
-function TreeList({ nodes, depth }: { nodes: TreeNode[]; depth: number }) {
+function TreeList({
+  nodes,
+  depth,
+  collapsedById,
+  onToggleCollapse,
+}: {
+  nodes: TreeNode[];
+  depth: number;
+  collapsedById: Record<string, boolean>;
+  onToggleCollapse: (nodeId: string) => void;
+}) {
   return (
     <ul className="space-y-1">
       {nodes.map((node) => (
-        <NodeRow key={node.id} node={node} depth={depth} />
+        <NodeRow
+          key={node.id}
+          node={node}
+          depth={depth}
+          collapsedById={collapsedById}
+          onToggleCollapse={onToggleCollapse}
+        />
       ))}
     </ul>
   );
@@ -70,6 +124,7 @@ export function DashboardSidebar() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [confirmArchiveOpen, setConfirmArchiveOpen] = useState(false);
+  const [collapsedById, setCollapsedById] = useState<Record<string, boolean>>({});
 
   const nodesById = useNodeStore((s) => s.nodesById);
   const syncNodesFromRows = useNodeStore((s) => s.syncNodesFromRows);
@@ -81,6 +136,37 @@ export function DashboardSidebar() {
     () => buildTreeFromRows(Object.values(nodesById)),
     [nodesById]
   );
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(COLLAPSED_NODES_STORAGE_KEY);
+      if (!raw) return;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCollapsedById(parsed as Record<string, boolean>);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const toggleNodeCollapsed = useCallback((nodeId: string) => {
+    setCollapsedById((prev) => {
+      const next = {
+        ...prev,
+        [nodeId]: !prev[nodeId],
+      };
+      try {
+        window.localStorage.setItem(
+          COLLAPSED_NODES_STORAGE_KEY,
+          JSON.stringify(next)
+        );
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   const loadNodes = useCallback(async () => {
     setLoading(true);
@@ -120,6 +206,7 @@ export function DashboardSidebar() {
   }, [resetWorkspace, syncNodesFromRows]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadNodes();
 
     const supabase = createClient();
@@ -204,7 +291,12 @@ export function DashboardSidebar() {
             No nodes yet — create one to start your graph.
           </p>
         ) : (
-          <TreeList nodes={displayRoots} depth={0} />
+          <TreeList
+            nodes={displayRoots}
+            depth={0}
+            collapsedById={collapsedById}
+            onToggleCollapse={toggleNodeCollapsed}
+          />
         )}
       </nav>
       <footer className="border-t border-sidebar-border px-3 py-3 text-xs text-muted-foreground">

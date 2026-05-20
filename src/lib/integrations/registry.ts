@@ -6,6 +6,8 @@ export type IntegrationCandidate = {
   summary: string;
   keywords: string[];
   auth: "api_key" | "oauth" | "unknown";
+  requiresProfileName?: boolean;
+  profileLabel?: string;
 };
 
 export const integrationRegistry: IntegrationCandidate[] = [
@@ -17,6 +19,8 @@ export const integrationRegistry: IntegrationCandidate[] = [
     summary: "Workout tracking and lift history.",
     keywords: ["fitness", "gym", "workout", "lifting", "weight room", "hevy"],
     auth: "unknown",
+    requiresProfileName: true,
+    profileLabel: "Hevy profile name",
   },
   {
     id: "strava",
@@ -26,6 +30,7 @@ export const integrationRegistry: IntegrationCandidate[] = [
     summary: "Running and cycling activity data.",
     keywords: ["fitness", "running", "cycling", "training", "strava"],
     auth: "oauth",
+    requiresProfileName: false,
   },
   {
     id: "notion",
@@ -35,6 +40,7 @@ export const integrationRegistry: IntegrationCandidate[] = [
     summary: "Docs, project notes, and task knowledge bases.",
     keywords: ["notes", "knowledge", "docs", "tasks", "notion", "productivity"],
     auth: "oauth",
+    requiresProfileName: false,
   },
   {
     id: "github",
@@ -44,6 +50,18 @@ export const integrationRegistry: IntegrationCandidate[] = [
     summary: "Repositories, issues, PRs, and engineering metadata.",
     keywords: ["code", "repo", "issues", "pull request", "engineering", "github"],
     auth: "oauth",
+    requiresProfileName: false,
+  },
+  {
+    id: "linkedin",
+    name: "LinkedIn",
+    category: "professional",
+    website: "https://www.linkedin.com",
+    summary: "Professional profiles, experience, and company context.",
+    keywords: ["linkedin", "professional", "career", "resume", "profile", "network"],
+    auth: "unknown",
+    requiresProfileName: true,
+    profileLabel: "LinkedIn handle or profile URL",
   },
 ];
 

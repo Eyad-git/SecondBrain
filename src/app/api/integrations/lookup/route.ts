@@ -22,6 +22,8 @@ export async function POST(req: Request) {
         baseUrl: candidate.website,
         auth: candidate.auth,
         notes: candidate.summary,
+        requiresProfileName: Boolean(candidate.requiresProfileName),
+        profileLabel: candidate.profileLabel ?? "profile name",
       },
     });
   } catch (error) {

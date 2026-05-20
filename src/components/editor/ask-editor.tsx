@@ -73,7 +73,7 @@ export const AskEditor = forwardRef<AskEditorHandle, AskEditorProps>(
           },
           handleKeyDown(_view, ev) {
             if (disabled || submitDisabled) return false;
-            if (ev.key === "Enter" && !ev.shiftKey && (ev.ctrlKey || ev.metaKey)) {
+            if (ev.key === "Enter" && !ev.shiftKey) {
               ev.preventDefault();
               void onSubmit?.();
               return true;
@@ -124,7 +124,7 @@ export const AskEditor = forwardRef<AskEditorHandle, AskEditorProps>(
             Mention menu pulls your <code className="text-foreground">nodes</code>{" "}
             through RLS.{" "}
             <span className="text-muted-foreground/90">
-              Send: Ctrl/Cmd + Enter.
+              Send: Enter (Shift+Enter for new line).
             </span>
           </p>
           <Button
