@@ -24,13 +24,26 @@ function applyTheme(mode: ThemeMode) {
 }
 
 export function ThemeToggle() {
-  const [mode, setMode] = useState<ThemeMode>(() => readInitialTheme());
+  const [mode, setMode] = useState<ThemeMode>("light");
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const initial = readInitialTheme();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMode(initial);
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
     applyTheme(mode);
   }, [mode]);
 
+  useEffect(() => {
+    // Intentionally only on mount to stabilize SSR/client output before reading browser theme.
+  }, []);
+
   const toggle = () => {
+    if (!hydrated) return;
     const next = mode === "dark" ? "light" : "dark";
     setMode(next);
     applyTheme(next);
@@ -41,17 +54,19 @@ export function ThemeToggle() {
     }
   };
 
+  const isDark = hydrated ? mode === "dark" : false;
+
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
       onClick={toggle}
-      title={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
     >
-      {mode === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-      {mode === "dark" ? "Light" : "Dark"}
+      {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      {isDark ? "Light" : "Dark"}
     </Button>
   );
 }

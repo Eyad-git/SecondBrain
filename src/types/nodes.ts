@@ -28,6 +28,23 @@ export type NodeScrapedSite = {
   createdAt: string;
 };
 
+export type NodeGooglePhotosItem = {
+  id: string;
+  nodeId: string;
+  itemType: "album" | "photo";
+  googleItemId: string;
+  title: string | null;
+  mediaUrl: string | null;
+  thumbnailUrl: string | null;
+  productUrl: string | null;
+  mimeType: string | null;
+  createdTime: string | null;
+  cameraMake: string | null;
+  cameraModel: string | null;
+  payloadJson: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type NodeRowSnapshot = {
   id: string;
   title: string;

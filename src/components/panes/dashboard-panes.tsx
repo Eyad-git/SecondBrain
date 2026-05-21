@@ -16,6 +16,7 @@ import {
 } from "@/lib/store/use-node-store";
 import type {
   NodeApiIntegration,
+  NodeGooglePhotosItem,
   NodeScrapedSite,
   NodeStatus,
 } from "@/types/nodes";
@@ -307,6 +308,32 @@ function parseStructuredScrape(
   };
 }
 
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        oauth2?: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            callback: (response: { access_token?: string; error?: string }) => void;
+            error_callback?: () => void;
+          }) => { requestAccessToken: (options?: { prompt?: string }) => void };
+        };
+      };
+    };
+  }
+}
+
+function parseDurationSeconds(duration: unknown, fallbackSeconds: number): number {
+  if (typeof duration !== "string") return fallbackSeconds;
+  const match = duration.trim().match(/^(\d+(?:\.\d+)?)s$/i);
+  if (!match) return fallbackSeconds;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return fallbackSeconds;
+  return value;
+}
+
 function ScrapedSiteCard({ site }: { site: NodeScrapedSite }) {
   const parsed = parseStructuredScrape(site.contentExcerpt);
   const heading = parsed.title?.trim() || site.title?.trim() || site.url;
@@ -412,8 +439,14 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const nodeScrapedSites = useNodeStore((s) =>
     nodeId ? (s.scrapedSitesByNodeId[nodeId] ?? EMPTY_NODE_SCRAPED_SITES) : EMPTY_NODE_SCRAPED_SITES
   );
+  const nodeGooglePhotos = useNodeStore((s) =>
+    nodeId
+      ? (s.googlePhotosByNodeId[nodeId] ?? EMPTY_NODE_GOOGLE_PHOTOS_ITEMS)
+      : EMPTY_NODE_GOOGLE_PHOTOS_ITEMS
+  );
   const setNodeIntegrations = useNodeStore((s) => s.setNodeIntegrations);
   const setNodeScrapedSites = useNodeStore((s) => s.setNodeScrapedSites);
+  const setNodeGooglePhotos = useNodeStore((s) => s.setNodeGooglePhotos);
   const [integrationName, setIntegrationName] = useState("");
   const [integrationBaseUrl, setIntegrationBaseUrl] = useState("");
   const [integrationAuth, setIntegrationAuth] = useState<
@@ -427,6 +460,15 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const [scrapedSitesLoading, setScrapedSitesLoading] = useState(false);
   const [scrapedSitesError, setScrapedSitesError] = useState<string | null>(null);
   const [scrapedSitesNotice, setScrapedSitesNotice] = useState<string | null>(null);
+  const [googlePhotosLoading, setGooglePhotosLoading] = useState(false);
+  const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
+  const [googlePhotosNotice, setGooglePhotosNotice] = useState<string | null>(null);
+  const [googlePhotosToken, setGooglePhotosToken] = useState<string | null>(null);
+  const [googleOAuthConfig, setGoogleOAuthConfig] = useState<{
+    clientId: string;
+    scope: string;
+  } | null>(null);
+  const [googleIdentityReady, setGoogleIdentityReady] = useState(false);
   const [scrapedConfidenceFilter, setScrapedConfidenceFilter] = useState<
     "all" | "medium_plus" | "high"
   >("all");
@@ -546,10 +588,64 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   }, [nodeId, setNodeScrapedSites]);
 
   useEffect(() => {
+    if (!nodeId) return;
+    const controller = new AbortController();
+
+    void (async () => {
+      setGooglePhotosLoading(true);
+      setGooglePhotosError(null);
+      setGooglePhotosNotice(null);
+      try {
+        const res = await fetch(
+          `/api/node-google-photos?nodeId=${encodeURIComponent(nodeId)}`,
+          { signal: controller.signal }
+        );
+        const json: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof (json as { error: unknown }).error === "string"
+              ? (json as { error: string }).error
+              : `HTTP ${res.status}`;
+          setGooglePhotosError(msg);
+          return;
+        }
+
+        const list =
+          json &&
+          typeof json === "object" &&
+          "items" in json &&
+          Array.isArray((json as { items?: unknown }).items)
+            ? ((json as { items: NodeGooglePhotosItem[] }).items ?? [])
+            : [];
+        const setupMessage =
+          json &&
+          typeof json === "object" &&
+          "setupMessage" in json &&
+          typeof (json as { setupMessage?: unknown }).setupMessage === "string"
+            ? (json as { setupMessage: string }).setupMessage
+            : null;
+        setGooglePhotosNotice(setupMessage);
+        setNodeGooglePhotos(nodeId, list);
+      } catch {
+        if (controller.signal.aborted) return;
+        setGooglePhotosError("Could not load Google Photos context.");
+      } finally {
+        if (!controller.signal.aborted) setGooglePhotosLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [nodeId, setNodeGooglePhotos]);
+
+  useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setToolLookupName("");
     setDocsLookupUrl("");
     setRotateDraftById({});
+    setGooglePhotosToken(null);
   }, [nodeId]);
 
   const addIntegration = useCallback(() => {
@@ -842,6 +938,355 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
     [nodeId, nodeIntegrations, setNodeIntegrations]
   );
 
+  const loadGoogleIdentityScript = useCallback(async () => {
+    if (typeof window === "undefined") {
+      throw new Error("Google auth is available only in the browser.");
+    }
+    if (window.google?.accounts?.oauth2) return;
+    await new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>(
+        'script[data-google-identity="true"]'
+      );
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Failed to load Google auth script.")), {
+          once: true,
+        });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleIdentity = "true";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Failed to load Google auth script."));
+      document.head.appendChild(script);
+    });
+    if (!window.google?.accounts?.oauth2) {
+      throw new Error("Google auth script loaded but OAuth client is unavailable.");
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const configRes = await fetch("/api/google-photos/config", { method: "GET" });
+        const configJson: unknown = await configRes.json().catch(() => ({}));
+        if (!configRes.ok) return;
+        const clientId =
+          configJson &&
+          typeof configJson === "object" &&
+          "clientId" in configJson &&
+          typeof (configJson as { clientId?: unknown }).clientId === "string"
+            ? (configJson as { clientId: string }).clientId
+            : "";
+        const scope =
+          configJson &&
+          typeof configJson === "object" &&
+          "scope" in configJson &&
+          typeof (configJson as { scope?: unknown }).scope === "string"
+            ? (configJson as { scope: string }).scope
+            : "";
+        if (!clientId || !scope || !active) return;
+        setGoogleOAuthConfig({ clientId, scope });
+        await loadGoogleIdentityScript();
+        if (!active) return;
+        setGoogleIdentityReady(true);
+      } catch {
+        if (!active) return;
+        setGoogleIdentityReady(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [loadGoogleIdentityScript]);
+
+  const connectGooglePhotos = useCallback(async () => {
+    setGooglePhotosError(null);
+    setGooglePhotosNotice(null);
+    if (!googleOAuthConfig || !googleIdentityReady || !window.google?.accounts?.oauth2) {
+      setGooglePhotosError(
+        "Google auth is still loading. Wait 1-2 seconds and try again."
+      );
+      return;
+    }
+    setGooglePhotosLoading(true);
+    try {
+      const token = await new Promise<string>((resolve, reject) => {
+        const tokenClient = window.google?.accounts?.oauth2?.initTokenClient({
+          client_id: googleOAuthConfig.clientId,
+          scope: googleOAuthConfig.scope,
+          callback: (response) => {
+            if (response.error || !response.access_token) {
+              reject(new Error(response.error || "Google authorization failed."));
+              return;
+            }
+            resolve(response.access_token);
+          },
+          error_callback: () => {
+            reject(new Error("Google authorization popup was blocked or closed."));
+          },
+        });
+        if (!tokenClient) {
+          reject(new Error("Could not initialize Google OAuth token client."));
+          return;
+        }
+        tokenClient.requestAccessToken({ prompt: "consent" });
+      });
+      setGooglePhotosToken(token);
+      setGooglePhotosNotice("Connected to Google Photos. You can now select items.");
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : "Could not connect to Google Photos.";
+      setGooglePhotosError(msg);
+    } finally {
+      setGooglePhotosLoading(false);
+    }
+  }, [googleIdentityReady, googleOAuthConfig]);
+
+  const selectGooglePhotos = useCallback(async () => {
+    if (!nodeId) return;
+    if (!googlePhotosToken) {
+      setGooglePhotosError("Connect Google Photos first.");
+      return;
+    }
+    setGooglePhotosError(null);
+    setGooglePhotosNotice(null);
+    setGooglePhotosLoading(true);
+    try {
+      const requestId = crypto.randomUUID();
+      const sessionRes = await fetch("/api/google-photos/picker-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken: googlePhotosToken, requestId }),
+      });
+      const sessionJson: unknown = await sessionRes.json().catch(() => ({}));
+      if (!sessionRes.ok) {
+        const msg =
+          sessionJson &&
+          typeof sessionJson === "object" &&
+          "error" in sessionJson &&
+          typeof (sessionJson as { error: unknown }).error === "string"
+            ? (sessionJson as { error: string }).error
+            : `HTTP ${sessionRes.status}`;
+        throw new Error(msg);
+      }
+
+      const session =
+        sessionJson &&
+        typeof sessionJson === "object" &&
+        "session" in sessionJson &&
+        (sessionJson as { session?: unknown }).session &&
+        typeof (sessionJson as { session?: unknown }).session === "object"
+          ? ((sessionJson as { session: Record<string, unknown> }).session ?? {})
+          : {};
+      const sessionId = typeof session.id === "string" ? session.id : "";
+      const pickerUri = typeof session.pickerUri === "string" ? session.pickerUri : "";
+      if (!sessionId || !pickerUri) {
+        throw new Error("Could not initialize Google Photos picker session.");
+      }
+
+      window.open(`${pickerUri.replace(/\/+$/, "")}/autoclose`, "_blank", "noopener,noreferrer");
+
+      const pollingConfig =
+        session.pollingConfig && typeof session.pollingConfig === "object"
+          ? (session.pollingConfig as Record<string, unknown>)
+          : {};
+      const pollSeconds = parseDurationSeconds(pollingConfig.pollInterval, 3);
+      const timeoutSeconds = parseDurationSeconds(pollingConfig.timeoutIn, 300);
+      const started = Date.now();
+      let mediaItemsSet = Boolean(session.mediaItemsSet);
+      while (!mediaItemsSet) {
+        if (Date.now() - started > timeoutSeconds * 1000) {
+          throw new Error("Timed out waiting for Google Photos selection.");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, pollSeconds * 1000));
+        const statusRes = await fetch(
+          `/api/google-photos/picker-session/${encodeURIComponent(sessionId)}?accessToken=${encodeURIComponent(googlePhotosToken)}`,
+          { method: "GET" }
+        );
+        const statusJson: unknown = await statusRes.json().catch(() => ({}));
+        if (!statusRes.ok) {
+          const msg =
+            statusJson &&
+            typeof statusJson === "object" &&
+            "error" in statusJson &&
+            typeof (statusJson as { error: unknown }).error === "string"
+              ? (statusJson as { error: string }).error
+              : `HTTP ${statusRes.status}`;
+          throw new Error(msg);
+        }
+        const polled =
+          statusJson &&
+          typeof statusJson === "object" &&
+          "session" in statusJson &&
+          (statusJson as { session?: unknown }).session &&
+          typeof (statusJson as { session?: unknown }).session === "object"
+            ? (statusJson as { session: Record<string, unknown> }).session
+            : null;
+        mediaItemsSet = Boolean(polled?.mediaItemsSet);
+      }
+
+      let pageToken: string | null = null;
+      const selected: Record<string, unknown>[] = [];
+      do {
+        const mediaRes = await fetch(
+          `/api/google-photos/picker-session/${encodeURIComponent(sessionId)}/media-items?accessToken=${encodeURIComponent(googlePhotosToken)}&pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+          { method: "GET" }
+        );
+        const mediaJson: unknown = await mediaRes.json().catch(() => ({}));
+        if (!mediaRes.ok) {
+          const msg =
+            mediaJson &&
+            typeof mediaJson === "object" &&
+            "error" in mediaJson &&
+            typeof (mediaJson as { error: unknown }).error === "string"
+              ? (mediaJson as { error: string }).error
+              : `HTTP ${mediaRes.status}`;
+          throw new Error(msg);
+        }
+        const result =
+          mediaJson &&
+          typeof mediaJson === "object" &&
+          "result" in mediaJson &&
+          (mediaJson as { result?: unknown }).result &&
+          typeof (mediaJson as { result?: unknown }).result === "object"
+            ? ((mediaJson as { result: Record<string, unknown> }).result ?? {})
+            : {};
+        const pageItems = Array.isArray(result.mediaItems)
+          ? (result.mediaItems as Record<string, unknown>[])
+          : [];
+        selected.push(...pageItems);
+        pageToken = typeof result.nextPageToken === "string" ? result.nextPageToken : null;
+      } while (pageToken);
+
+      if (selected.length === 0) {
+        setGooglePhotosNotice("No media items were selected.");
+        return;
+      }
+
+      const toSave = selected.map((item) => {
+        const mediaFile =
+          item.mediaFile && typeof item.mediaFile === "object"
+            ? (item.mediaFile as Record<string, unknown>)
+            : {};
+        const metadata =
+          mediaFile.mediaFileMetadata && typeof mediaFile.mediaFileMetadata === "object"
+            ? (mediaFile.mediaFileMetadata as Record<string, unknown>)
+            : {};
+        const photoMeta =
+          metadata.photo && typeof metadata.photo === "object"
+            ? (metadata.photo as Record<string, unknown>)
+            : {};
+        const id = typeof item.id === "string" ? item.id : crypto.randomUUID();
+        const maybeType =
+          typeof item.itemType === "string"
+            ? item.itemType.toLowerCase()
+            : typeof item.type === "string"
+              ? item.type.toLowerCase()
+              : "photo";
+        return {
+          itemType: maybeType === "album" ? "album" : "photo",
+          googleItemId: id,
+          title:
+            typeof mediaFile.filename === "string"
+              ? mediaFile.filename
+              : typeof item.id === "string"
+                ? item.id
+                : null,
+          mediaUrl: typeof mediaFile.baseUrl === "string" ? mediaFile.baseUrl : null,
+          thumbnailUrl:
+            typeof mediaFile.baseUrl === "string"
+              ? `${mediaFile.baseUrl}=w512-h512`
+              : null,
+          productUrl: typeof item.pickerUri === "string" ? item.pickerUri : null,
+          mimeType: typeof mediaFile.mimeType === "string" ? mediaFile.mimeType : null,
+          createdTime:
+            typeof metadata.createTime === "string" ? metadata.createTime : null,
+          cameraMake:
+            typeof photoMeta.cameraMake === "string" ? photoMeta.cameraMake : null,
+          cameraModel:
+            typeof photoMeta.cameraModel === "string" ? photoMeta.cameraModel : null,
+          payloadJson: item,
+        };
+      });
+
+      const saveRes = await fetch("/api/node-google-photos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodeId, items: toSave }),
+      });
+      const saveJson: unknown = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        const msg =
+          saveJson &&
+          typeof saveJson === "object" &&
+          "error" in saveJson &&
+          typeof (saveJson as { error: unknown }).error === "string"
+            ? (saveJson as { error: string }).error
+            : `HTTP ${saveRes.status}`;
+        throw new Error(msg);
+      }
+      const savedItems =
+        saveJson &&
+        typeof saveJson === "object" &&
+        "items" in saveJson &&
+        Array.isArray((saveJson as { items?: unknown }).items)
+          ? ((saveJson as { items: NodeGooglePhotosItem[] }).items ?? [])
+          : [];
+      const mergedById = new Map(
+        [...nodeGooglePhotos, ...savedItems].map((x) => [x.id, x])
+      );
+      setNodeGooglePhotos(nodeId, [...mergedById.values()]);
+      setGooglePhotosNotice(`Imported ${savedItems.length} Google Photos item(s).`);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : "Could not import Google Photos items.";
+      setGooglePhotosError(msg);
+    } finally {
+      setGooglePhotosLoading(false);
+    }
+  }, [googlePhotosToken, nodeGooglePhotos, nodeId, setNodeGooglePhotos]);
+
+  const removeGooglePhotoItem = useCallback(
+    (itemId: string) => {
+      if (!nodeId) return;
+      void (async () => {
+        setGooglePhotosError(null);
+        setGooglePhotosLoading(true);
+        try {
+          const res = await fetch(`/api/node-google-photos/${itemId}`, {
+            method: "DELETE",
+          });
+          const json: unknown = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const msg =
+              json &&
+              typeof json === "object" &&
+              "error" in json &&
+              typeof (json as { error: unknown }).error === "string"
+                ? (json as { error: string }).error
+                : `HTTP ${res.status}`;
+            setGooglePhotosError(msg);
+            return;
+          }
+          setNodeGooglePhotos(
+            nodeId,
+            nodeGooglePhotos.filter((x) => x.id !== itemId)
+          );
+        } catch {
+          setGooglePhotosError("Could not remove Google Photos item.");
+        } finally {
+          setGooglePhotosLoading(false);
+        }
+      })();
+    },
+    [nodeGooglePhotos, nodeId, setNodeGooglePhotos]
+  );
+
   const core = snapshot?.core_summary?.trim();
   const systemPrompt = snapshot?.system_prompt?.trim();
   const filteredScrapedSites = nodeScrapedSites.filter((site) => {
@@ -854,6 +1299,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const promptSection = usePersistedContextSectionCollapsed("system-prompt");
   const linksSection = usePersistedContextSectionCollapsed("linked-nodes");
   const apiSection = usePersistedContextSectionCollapsed("node-apis", true);
+  const googlePhotosSection = usePersistedContextSectionCollapsed("google-photos", true);
   const scrapedSection = usePersistedContextSectionCollapsed("scraped-sites", true);
 
   return (
@@ -1145,6 +1591,132 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
           </ContextSection>
 
           <ContextSection
+            sectionId="google-photos"
+            title="Google Photos"
+            collapsed={googlePhotosSection.collapsed}
+            onToggle={googlePhotosSection.toggle}
+            action={
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={googlePhotosSection.toggle}
+              >
+                {googlePhotosSection.collapsed ? "Google Photos" : "Hide Photos"}
+              </Button>
+            }
+          >
+            <div className="space-y-2">
+              {googlePhotosLoading ? (
+                <p className="text-xs text-muted-foreground">Syncing Google Photos context…</p>
+              ) : null}
+              {googlePhotosError ? (
+                <p className="text-xs text-destructive">{googlePhotosError}</p>
+              ) : null}
+              {googlePhotosNotice ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {googlePhotosNotice}
+                </p>
+              ) : null}
+              <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                <p className="font-medium text-foreground">Setup checklist</p>
+                <p>
+                  1) Supabase table setup is complete (
+                  <code className="text-foreground">node_google_photos_items</code> is applied).
+                </p>
+                <p>
+                  2) Set{" "}
+                  <code className="text-foreground">
+                    NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
+                  </code>
+                  .
+                </p>
+                <p>
+                  3) Enable Google Photos Picker API + OAuth consent for scope{" "}
+                  <code className="text-foreground">
+                    photospicker.mediaitems.readonly
+                  </code>
+                  .
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void connectGooglePhotos()}
+                  disabled={googlePhotosLoading || !googleIdentityReady || !googleOAuthConfig}
+                >
+                  {googlePhotosToken ? "Reconnect Google" : "Connect Google Photos"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void selectGooglePhotos()}
+                  disabled={googlePhotosLoading || !googlePhotosToken}
+                >
+                  Select albums/photos
+                </Button>
+              </div>
+
+              {nodeGooglePhotos.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No Google Photos selected for this node yet.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {nodeGooglePhotos.map((item) => (
+                    <li
+                      key={item.id}
+                      className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {item.title || item.googleItemId}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {item.itemType}
+                            {item.createdTime ? ` · ${item.createdTime}` : ""}
+                            {item.mimeType ? ` · ${item.mimeType}` : ""}
+                          </p>
+                          {(item.cameraMake || item.cameraModel) ? (
+                            <p className="text-xs text-muted-foreground">
+                              Camera: {[item.cameraMake, item.cameraModel]
+                                .filter(Boolean)
+                                .join(" ")}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {item.productUrl ? (
+                            <a
+                              href={item.productUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                            >
+                              Open
+                            </a>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => removeGooglePhotoItem(item.id)}
+                            className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </ContextSection>
+
+          <ContextSection
             sectionId="scraped-sites"
             title="Scraped Sites"
             collapsed={scrapedSection.collapsed}
@@ -1269,6 +1841,7 @@ type PlanDraft = {
 };
 const EMPTY_NODE_INTEGRATIONS: NodeApiIntegration[] = [];
 const EMPTY_NODE_SCRAPED_SITES: NodeScrapedSite[] = [];
+const EMPTY_NODE_GOOGLE_PHOTOS_ITEMS: NodeGooglePhotosItem[] = [];
 
 export function QuestionsPane() {
   const nodeId = useNodeStore((s) => s.selectedNodeId);

@@ -63,6 +63,7 @@ export async function POST(req: Request) {
       ...new Set((body.mentionNodeIds ?? []).filter(Boolean)),
     ];
     let integrationBlock = "";
+    let googlePhotosBlock = "";
     if (integrationNodeIds.length > 0) {
       const {
         data: { user },
@@ -93,6 +94,43 @@ export async function POST(req: Request) {
             integrationErr instanceof Error ? integrationErr.message : "unknown";
           console.error("[api/chat] node_api_integrations:", message);
         }
+        try {
+          const { data: photosRows, error: photosError } = await supabase
+            .from("node_google_photos_items")
+            .select(
+              "node_id,item_type,title,mime_type,created_time,camera_make,camera_model,product_url"
+            )
+            .eq("user_id", user.id)
+            .in("node_id", integrationNodeIds)
+            .order("created_at", { ascending: false })
+            .limit(80);
+          if (photosError) throw new Error(photosError.message);
+          const lines = (photosRows ?? []).slice(0, 60).map((row) => {
+            const parts = [
+              `- node=${String(row.node_id)}`,
+              `type=${row.item_type === "album" ? "album" : "photo"}`,
+              `title=${typeof row.title === "string" && row.title.trim().length > 0 ? row.title : "(untitled)"}`,
+              typeof row.created_time === "string" ? `created=${row.created_time}` : null,
+              typeof row.mime_type === "string" ? `mime=${row.mime_type}` : null,
+              row.camera_make || row.camera_model
+                ? `camera=${[row.camera_make, row.camera_model].filter(Boolean).join(" ")}`
+                : null,
+              typeof row.product_url === "string" && row.product_url.length > 0
+                ? `url=${row.product_url}`
+                : null,
+            ].filter(Boolean);
+            return parts.join(" | ");
+          });
+          if (lines.length > 0) {
+            googlePhotosBlock = [
+              "## Node Google Photos context (user-selected)",
+              ...lines,
+            ].join("\n");
+          }
+        } catch (photosErr) {
+          const message = photosErr instanceof Error ? photosErr.message : "unknown";
+          console.error("[api/chat] node_google_photos_items:", message);
+        }
       }
     }
 
@@ -101,6 +139,7 @@ export async function POST(req: Request) {
       baseAssistantInstructions({ allowIntegrationSuggestions: true }),
       graphBlock,
       integrationBlock,
+      googlePhotosBlock,
       `(Tools) ${toolsInstructions}`,
       graphBlock
         ? ""

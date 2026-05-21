@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { pickDefaultSelectedId } from "@/lib/nodes/tree";
 import type {
   NodeApiIntegration,
+  NodeGooglePhotosItem,
   NodeRowSnapshot,
   NodeScrapedSite,
 } from "@/types/nodes";
@@ -13,8 +14,10 @@ export type WorkspaceNodeStore = {
   nodesById: Record<string, NodeRowSnapshot>;
   integrationsByNodeId: Record<string, NodeApiIntegration[]>;
   scrapedSitesByNodeId: Record<string, NodeScrapedSite[]>;
+  googlePhotosByNodeId: Record<string, NodeGooglePhotosItem[]>;
   setNodeIntegrations: (nodeId: string, integrations: NodeApiIntegration[]) => void;
   setNodeScrapedSites: (nodeId: string, sites: NodeScrapedSite[]) => void;
+  setNodeGooglePhotos: (nodeId: string, items: NodeGooglePhotosItem[]) => void;
   syncNodesFromRows: (rows: NodeRowSnapshot[]) => void;
   /** Replace merged snapshot after a targeted fetch (fresh `core_summary`, onboarding, etc.). */
   mergeNodeSnapshot: (row: NodeRowSnapshot) => void;
@@ -40,6 +43,7 @@ export const useNodeStore = create<WorkspaceNodeStore>((set) => ({
   nodesById: {},
   integrationsByNodeId: {},
   scrapedSitesByNodeId: {},
+  googlePhotosByNodeId: {},
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
 
   setNodeIntegrations: (nodeId, integrations) =>
@@ -55,6 +59,14 @@ export const useNodeStore = create<WorkspaceNodeStore>((set) => ({
       scrapedSitesByNodeId: {
         ...state.scrapedSitesByNodeId,
         [nodeId]: sites,
+      },
+    })),
+
+  setNodeGooglePhotos: (nodeId, items) =>
+    set((state) => ({
+      googlePhotosByNodeId: {
+        ...state.googlePhotosByNodeId,
+        [nodeId]: items,
       },
     })),
 
@@ -98,6 +110,7 @@ export const useNodeStore = create<WorkspaceNodeStore>((set) => ({
       nodesById: {},
       integrationsByNodeId: {},
       scrapedSitesByNodeId: {},
+      googlePhotosByNodeId: {},
     }),
 }));
 
