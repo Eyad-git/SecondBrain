@@ -10,7 +10,9 @@ import type {
 
 export type WorkspaceNodeStore = {
   selectedNodeId: string | null;
+  googlePhotosAccessToken: string | null;
   setSelectedNodeId: (id: string | null) => void;
+  setGooglePhotosAccessToken: (token: string | null) => void;
   nodesById: Record<string, NodeRowSnapshot>;
   integrationsByNodeId: Record<string, NodeApiIntegration[]>;
   scrapedSitesByNodeId: Record<string, NodeScrapedSite[]>;
@@ -40,11 +42,13 @@ export type WorkspaceNodeStore = {
 
 export const useNodeStore = create<WorkspaceNodeStore>((set) => ({
   selectedNodeId: null,
+  googlePhotosAccessToken: null,
   nodesById: {},
   integrationsByNodeId: {},
   scrapedSitesByNodeId: {},
   googlePhotosByNodeId: {},
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
+  setGooglePhotosAccessToken: (token) => set({ googlePhotosAccessToken: token }),
 
   setNodeIntegrations: (nodeId, integrations) =>
     set((state) => ({
@@ -107,6 +111,7 @@ export const useNodeStore = create<WorkspaceNodeStore>((set) => ({
   resetWorkspace: () =>
     set({
       selectedNodeId: null,
+      googlePhotosAccessToken: null,
       nodesById: {},
       integrationsByNodeId: {},
       scrapedSitesByNodeId: {},

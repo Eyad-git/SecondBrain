@@ -21,6 +21,9 @@ import type {
   NodeStatus,
 } from "@/types/nodes";
 
+import { useGooglePhotosAuth } from "@/hooks/use-google-photos-auth";
+import { persistGooglePhotosSession } from "@/lib/google-photos/token";
+
 const PANE_COLLAPSE_PREFIX = "sb.dashboard.pane.";
 const CONTEXT_SECTION_COLLAPSE_PREFIX = "sb.dashboard.context.section.";
 
@@ -463,7 +466,8 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const [googlePhotosLoading, setGooglePhotosLoading] = useState(false);
   const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
   const [googlePhotosNotice, setGooglePhotosNotice] = useState<string | null>(null);
-  const [googlePhotosToken, setGooglePhotosToken] = useState<string | null>(null);
+  const googlePhotosAuth = useGooglePhotosAuth();
+  const googlePhotosToken = googlePhotosAuth.accessToken;
   const [googleOAuthConfig, setGoogleOAuthConfig] = useState<{
     clientId: string;
     scope: string;
@@ -645,7 +649,6 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
     setToolLookupName("");
     setDocsLookupUrl("");
     setRotateDraftById({});
-    setGooglePhotosToken(null);
   }, [nodeId]);
 
   const addIntegration = useCallback(() => {
@@ -1036,8 +1039,12 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
         }
         tokenClient.requestAccessToken({ prompt: "consent" });
       });
-      setGooglePhotosToken(token);
-      setGooglePhotosNotice("Connected to Google Photos. You can now select items.");
+      googlePhotosAuth.applyToken(token);
+      await persistGooglePhotosSession(token);
+      await googlePhotosAuth.refreshSession();
+      setGooglePhotosNotice(
+        "Connected to Google Photos. Connection stays active across nodes and sessions — import photos separately per node."
+      );
     } catch (error) {
       const msg =
         error instanceof Error ? error.message : "Could not connect to Google Photos.";
@@ -1045,12 +1052,16 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
     } finally {
       setGooglePhotosLoading(false);
     }
-  }, [googleIdentityReady, googleOAuthConfig]);
+  }, [googleIdentityReady, googleOAuthConfig, googlePhotosAuth]);
 
   const selectGooglePhotos = useCallback(async () => {
     if (!nodeId) return;
     if (!googlePhotosToken) {
-      setGooglePhotosError("Connect Google Photos first.");
+      setGooglePhotosError(
+        googlePhotosAuth.serverConnected
+          ? "Reconnect Google Photos once to run the picker (local token missing)."
+          : "Connect Google Photos first."
+      );
       return;
     }
     setGooglePhotosError(null);
@@ -1134,7 +1145,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
       const selected: Record<string, unknown>[] = [];
       do {
         const mediaRes = await fetch(
-          `/api/google-photos/picker-session/${encodeURIComponent(sessionId)}/media-items?accessToken=${encodeURIComponent(googlePhotosToken)}&pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+          `/api/google-photos/media-items?sessionId=${encodeURIComponent(sessionId)}&accessToken=${encodeURIComponent(googlePhotosToken)}&pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
           { method: "GET" }
         );
         const mediaJson: unknown = await mediaRes.json().catch(() => ({}));
@@ -1249,7 +1260,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
     } finally {
       setGooglePhotosLoading(false);
     }
-  }, [googlePhotosToken, nodeGooglePhotos, nodeId, setNodeGooglePhotos]);
+  }, [googlePhotosAuth.serverConnected, googlePhotosToken, nodeGooglePhotos, nodeId, setNodeGooglePhotos]);
 
   const removeGooglePhotoItem = useCallback(
     (itemId: string) => {
@@ -1301,6 +1312,10 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
   const apiSection = usePersistedContextSectionCollapsed("node-apis", true);
   const googlePhotosSection = usePersistedContextSectionCollapsed("google-photos", true);
   const scrapedSection = usePersistedContextSectionCollapsed("scraped-sites", true);
+  const googlePhotosConnected = googlePhotosAuth.connected;
+  const googlePhotosVisionReady = Boolean(
+    googlePhotosConnected && nodeGooglePhotos.length > 0
+  );
 
   return (
     <PaneCard
@@ -1618,6 +1633,29 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
                   {googlePhotosNotice}
                 </p>
               ) : null}
+              <div className="flex items-center gap-2 text-xs">
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 font-medium",
+                    googlePhotosVisionReady
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                  )}
+                >
+                  {googlePhotosVisionReady
+                    ? "Vision ready on this node"
+                    : googlePhotosConnected
+                      ? "Import photos on this node"
+                      : "Connect Google for vision"}
+                </span>
+                {!googlePhotosVisionReady ? (
+                  <span className="text-muted-foreground">
+                    {googlePhotosConnected
+                      ? "Use Select albums/photos to attach images to this node only."
+                      : "Connect once, then import photos per node."}
+                  </span>
+                ) : null}
+              </div>
               <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
                 <p className="font-medium text-foreground">Setup checklist</p>
                 <p>
@@ -1648,7 +1686,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
                   onClick={() => void connectGooglePhotos()}
                   disabled={googlePhotosLoading || !googleIdentityReady || !googleOAuthConfig}
                 >
-                  {googlePhotosToken ? "Reconnect Google" : "Connect Google Photos"}
+                  {googlePhotosConnected ? "Reconnect Google" : "Connect Google Photos"}
                 </Button>
                 <Button
                   type="button"

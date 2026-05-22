@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 
 import { DashboardSidebar } from "@/components/sidebar/graph-tree-sidebar";
+import { useGooglePhotosAuth } from "@/hooks/use-google-photos-auth";
+
+function GooglePhotosAuthBootstrap() {
+  useGooglePhotosAuth();
+  return null;
+}
 
 export default function DashboardLayout({
   children,
@@ -35,6 +41,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex min-h-[100dvh] w-full bg-background">
+      <GooglePhotosAuthBootstrap />
       {isDesktop ? (
         <div className="flex shrink-0">
           <DashboardSidebar />

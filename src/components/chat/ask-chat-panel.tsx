@@ -25,6 +25,7 @@ import {
   chatKeyFromAnchor,
   useChatTrashStore,
 } from "@/lib/store/use-chat-trash-store";
+import { useGooglePhotosAuth } from "@/hooks/use-google-photos-auth";
 import { useNodeStore, useSelectedNodeTitle } from "@/lib/store/use-node-store";
 import { cn } from "@/lib/utils";
 import { extractMentionedNodeIds } from "@/lib/chat/mention-extract";
@@ -195,6 +196,8 @@ export function AskChatPanel({ anchorNodeId }: Props) {
   const nodeTitle = useSelectedNodeTitle();
   const setNodeIntegrations = useNodeStore((s) => s.setNodeIntegrations);
   const setNodeScrapedSites = useNodeStore((s) => s.setNodeScrapedSites);
+  const googlePhotosAuth = useGooglePhotosAuth();
+  const googlePhotosAccessToken = googlePhotosAuth.accessToken;
 
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [confirmMoveToBinOpen, setConfirmMoveToBinOpen] = useState(false);
@@ -247,11 +250,12 @@ export function AskChatPanel({ anchorNodeId }: Props) {
               ...base,
               messages,
               mentionNodeIds,
+              googlePhotosAccessToken: googlePhotosAccessToken ?? null,
             },
           };
         },
       }),
-    [anchorNodeId]
+    [anchorNodeId, googlePhotosAccessToken]
   );
 
   const {
@@ -961,6 +965,7 @@ export function AskChatPanel({ anchorNodeId }: Props) {
     pendingScrapeSetup,
     previewAndAskScrapeConfirmation,
     buildScrapeTarget,
+    googlePhotosAccessToken,
     refreshNodeIntegrations,
     refreshScrapedSites,
     sendMessage,

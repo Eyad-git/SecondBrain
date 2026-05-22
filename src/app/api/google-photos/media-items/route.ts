@@ -1,26 +1,33 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { GOOGLE_PHOTOS_TOKEN_COOKIE } from "@/lib/google-photos/token";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-const createSchema = z.object({
+const querySchema = z.object({
   accessToken: z.string().min(1).max(6000),
-  requestId: z.string().uuid().optional(),
+  sessionId: z.string().min(1).max(500),
+  pageToken: z.string().max(2000).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 function authHeader(accessToken: string): HeadersInit {
   return {
     Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
   };
 }
 
-export async function POST(req: Request) {
+export async function GET(req: Request) {
   try {
-    const body = createSchema.parse(await req.json());
+    const url = new URL(req.url);
+    const parsed = querySchema.parse({
+      accessToken: url.searchParams.get("accessToken") ?? "",
+      sessionId: url.searchParams.get("sessionId") ?? "",
+      pageToken: url.searchParams.get("pageToken") ?? undefined,
+      pageSize: url.searchParams.get("pageSize") ?? undefined,
+    });
+
     const supabase = await createSupabaseServerClient();
     const {
       data: { user },
@@ -29,16 +36,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const url = new URL("https://photospicker.googleapis.com/v1/sessions");
-    if (body.requestId) url.searchParams.set("requestId", body.requestId);
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: authHeader(body.accessToken),
-      body: JSON.stringify({}),
+    const target = new URL("https://photospicker.googleapis.com/v1/mediaItems");
+    target.searchParams.set("sessionId", parsed.sessionId);
+    if (parsed.pageToken) target.searchParams.set("pageToken", parsed.pageToken);
+    if (parsed.pageSize) target.searchParams.set("pageSize", String(parsed.pageSize));
+
+    const response = await fetch(target.toString(), {
+      method: "GET",
+      headers: authHeader(parsed.accessToken),
       cache: "no-store",
     });
     const json: unknown = await response.json().catch(() => ({}));
-
     if (!response.ok) {
       const message =
         json &&
@@ -50,29 +58,19 @@ export async function POST(req: Request) {
           ? String((json as { error: { message: string } }).error.message)
           : `HTTP ${response.status}`;
       return NextResponse.json(
-        { error: `Could not create Google Photos picker session: ${message}` },
+        { error: `Could not list picked media items: ${message}` },
         { status: 400 }
       );
     }
 
-    const res = NextResponse.json({
-      session: json,
-    });
-    res.cookies.set(GOOGLE_PHOTOS_TOKEN_COOKIE, body.accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24,
-    });
-    return res;
+    return NextResponse.json({ result: json });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    console.error("[api/google-photos/picker-session:post]", error);
+    console.error("[api/google-photos/media-items:get]", error);
     return NextResponse.json(
-      { error: "Failed to create Google Photos picker session." },
+      { error: "Failed to list picked Google Photos media items." },
       { status: 500 }
     );
   }
