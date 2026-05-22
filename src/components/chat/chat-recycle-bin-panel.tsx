@@ -7,10 +7,7 @@ import { useId, useMemo, useRef, useState } from "react";
 import { ChatConfirmModal } from "@/components/chat/chat-confirm-modal";
 import { ChatModalShell } from "@/components/chat/chat-modal-shell";
 import type { ArchivedChatEntry } from "@/lib/store/use-chat-trash-store";
-import {
-  chatKeyFromAnchor,
-  useChatTrashStore,
-} from "@/lib/store/use-chat-trash-store";
+import { useChatTrashStore } from "@/lib/store/use-chat-trash-store";
 import { Button } from "@/components/ui/button";
 
 function previewSnippet(entry: ArchivedChatEntry): string {
@@ -39,6 +36,8 @@ type Props = {
   ownerId: string;
   sessionReady?: boolean;
   anchorNodeId: string | null;
+  /** Current `useChat` session key (includes active chat id when set). */
+  activeChatKey: string;
   currentMessagesCount: number;
   onRestoreMessages: (messages: UIMessage[]) => void;
 };
@@ -47,6 +46,7 @@ export function ChatRecycleBinPanel({
   ownerId,
   sessionReady = true,
   anchorNodeId,
+  activeChatKey,
   currentMessagesCount,
   onRestoreMessages,
 }: Props) {
@@ -76,7 +76,6 @@ export function ChatRecycleBinPanel({
   }
 
   const titleId = useId();
-  const activeKey = chatKeyFromAnchor(anchorNodeId);
 
   const [purgeAllOpen, setPurgeAllOpen] = useState(false);
   const [eraseTarget, setEraseTarget] = useState<ArchivedChatEntry | null>(
@@ -134,7 +133,7 @@ export function ChatRecycleBinPanel({
             ) : (
               <ul className="space-y-3">
                 {entries.map((e) => {
-                  const canRestore = e.chatKey === activeKey;
+                  const canRestore = e.chatKey === activeChatKey;
                   return (
                     <li
                       key={e.id}

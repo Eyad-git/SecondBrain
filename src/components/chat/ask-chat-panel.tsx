@@ -17,11 +17,17 @@ import {
   type AskEditorHandle,
 } from "@/components/editor/ask-editor";
 import { ChatConfirmModal } from "@/components/chat/chat-confirm-modal";
+import { ChatHistoryPanel } from "@/components/chat/chat-history-panel";
 import { ChatRecycleBinPanel } from "@/components/chat/chat-recycle-bin-panel";
 import { MermaidDiagram } from "@/components/ui/mermaid-diagram";
 import { Button } from "@/components/ui/button";
 import { randomId } from "@/lib/random-id";
 import { createClient } from "@/lib/supabase/client";
+import type { ChatSession } from "@/lib/store/use-chat-sessions-store";
+import {
+  chatSessionKey,
+  useChatSessionsStore,
+} from "@/lib/store/use-chat-sessions-store";
 import {
   chatKeyFromAnchor,
   useChatTrashStore,
@@ -55,7 +61,24 @@ type ScrapePreview = {
   contentExcerpt: string;
 };
 
-const ASK_HISTORY_PREFIX = "sb.ask.history.";
+const LEGACY_ASK_HISTORY_PREFIX = "sb.ask.history.";
+
+function loadLegacyAskHistory(anchorNodeId: string): UIMessage[] | null {
+  try {
+    const raw = window.localStorage.getItem(
+      `${LEGACY_ASK_HISTORY_PREFIX}${anchorNodeId}`
+    );
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    window.localStorage.removeItem(
+      `${LEGACY_ASK_HISTORY_PREFIX}${anchorNodeId}`
+    );
+    return parsed as UIMessage[];
+  } catch {
+    return null;
+  }
+}
 
 type PendingScrapeSetup = {
   stage: "site" | "username" | "details" | "confirm";
@@ -208,9 +231,18 @@ export function AskChatPanel({ anchorNodeId }: Props) {
   const [pendingScrapeSetup, setPendingScrapeSetup] =
     useState<PendingScrapeSetup | null>(null);
   const [commandBusy, setCommandBusy] = useState(false);
-  const historyStorageKey = anchorNodeId
-    ? `${ASK_HISTORY_PREFIX}${anchorNodeId}`
-    : null;
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [namingInProgress, setNamingInProgress] = useState(false);
+  const loadedSessionRef = useRef<string | null>(null);
+
+  const listForNode = useChatSessionsStore((s) => s.listForNode);
+  const ensureActiveSession = useChatSessionsStore((s) => s.ensureActiveSession);
+  const getSession = useChatSessionsStore((s) => s.getSession);
+  const setActiveSession = useChatSessionsStore((s) => s.setActiveSession);
+  const updateSessionMessages = useChatSessionsStore(
+    (s) => s.updateSessionMessages
+  );
+  const archiveAndStartNew = useChatSessionsStore((s) => s.archiveAndStartNew);
 
   useEffect(() => {
     const supabase = createClient();
@@ -226,6 +258,45 @@ export function AskChatPanel({ anchorNodeId }: Props) {
   }, []);
 
   const archiveConversation = useChatTrashStore((s) => s.archiveConversation);
+
+  useEffect(() => {
+    loadedSessionRef.current = null;
+  }, [anchorNodeId]);
+
+  useEffect(() => {
+    if (!sessionUserId || !anchorNodeId) {
+      setActiveSessionId(null);
+      loadedSessionRef.current = null;
+      return;
+    }
+
+    const existing = listForNode(sessionUserId, anchorNodeId);
+    const legacy =
+      existing.length === 0 ? loadLegacyAskHistory(anchorNodeId) : null;
+    const id = ensureActiveSession({
+      ownerId: sessionUserId,
+      anchorNodeId,
+      initialMessages: legacy ?? undefined,
+    });
+    setActiveSessionId(id);
+  }, [anchorNodeId, ensureActiveSession, listForNode, sessionUserId]);
+
+  useEffect(() => {
+    if (!sessionUserId || !anchorNodeId || !activeSessionId) return;
+    if (getSession(activeSessionId)) return;
+    loadedSessionRef.current = null;
+    const id = ensureActiveSession({
+      ownerId: sessionUserId,
+      anchorNodeId,
+    });
+    setActiveSessionId(id);
+  }, [
+    activeSessionId,
+    anchorNodeId,
+    ensureActiveSession,
+    getSession,
+    sessionUserId,
+  ]);
 
   const transport = useMemo(
     () =>
@@ -268,7 +339,10 @@ export function AskChatPanel({ anchorNodeId }: Props) {
     setMessages,
     clearError,
   } = useChat({
-    id: anchorNodeId ? `ask-${anchorNodeId}` : "ask-none",
+    id:
+      anchorNodeId && activeSessionId
+        ? chatSessionKey(anchorNodeId, activeSessionId)
+        : "ask-none",
     transport,
   });
 
@@ -279,27 +353,120 @@ export function AskChatPanel({ anchorNodeId }: Props) {
   }, [messages, status]);
 
   useEffect(() => {
-    if (!historyStorageKey) return;
-    try {
-      const raw = window.localStorage.getItem(historyStorageKey);
-      if (!raw) return;
-      const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return;
-      setMessages(parsed as UIMessage[]);
+    if (!activeSessionId) return;
+    if (loadedSessionRef.current === activeSessionId) return;
+    loadedSessionRef.current = activeSessionId;
+    const session = getSession(activeSessionId);
+    if (session) {
+      setMessages(
+        JSON.parse(JSON.stringify(session.messages)) as UIMessage[]
+      );
       clearError?.();
-    } catch {
-      /* ignore */
     }
-  }, [clearError, historyStorageKey, setMessages]);
+  }, [activeSessionId, clearError, getSession, setMessages]);
 
   useEffect(() => {
-    if (!historyStorageKey) return;
+    if (!activeSessionId) return;
+    updateSessionMessages(activeSessionId, messages);
+  }, [activeSessionId, messages, updateSessionMessages]);
+
+  const fetchTitleForMessages = useCallback(
+    async (msgs: UIMessage[]): Promise<string> => {
+      try {
+        const res = await fetch("/api/chat/title", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: msgs,
+            nodeTitle: nodeTitle ?? undefined,
+          }),
+        });
+        const json: unknown = await res.json().catch(() => ({}));
+        if (
+          res.ok &&
+          json &&
+          typeof json === "object" &&
+          "title" in json &&
+          typeof (json as { title: unknown }).title === "string"
+        ) {
+          return (json as { title: string }).title;
+        }
+      } catch {
+        /* fallback */
+      }
+      return "Chat";
+    },
+    [nodeTitle]
+  );
+
+  const handleNewChat = useCallback(async () => {
+    if (!sessionUserId || !anchorNodeId || !activeSessionId || busy) return;
+
+    if (messages.length === 0) return;
+
+    setNamingInProgress(true);
     try {
-      window.localStorage.setItem(historyStorageKey, JSON.stringify(messages));
-    } catch {
-      /* ignore */
+      const title = await fetchTitleForMessages(messages);
+      const newId = archiveAndStartNew({
+        ownerId: sessionUserId,
+        anchorNodeId,
+        sessionId: activeSessionId,
+        title,
+        messages,
+      });
+      loadedSessionRef.current = newId;
+      setActiveSessionId(newId);
+      setMessages([]);
+      clearError?.();
+      setPendingApiSetup(null);
+      setPendingScrapeSetup(null);
+    } finally {
+      setNamingInProgress(false);
     }
-  }, [historyStorageKey, messages]);
+  }, [
+    activeSessionId,
+    anchorNodeId,
+    archiveAndStartNew,
+    busy,
+    clearError,
+    fetchTitleForMessages,
+    messages,
+    sessionUserId,
+    setMessages,
+  ]);
+
+  const handleSelectSession = useCallback(
+    async (session: ChatSession) => {
+      if (!sessionUserId || !anchorNodeId) return;
+      if (activeSessionId) {
+        updateSessionMessages(activeSessionId, messages);
+      }
+      setActiveSession(sessionUserId, anchorNodeId, session.id);
+      loadedSessionRef.current = session.id;
+      setActiveSessionId(session.id);
+      setMessages(
+        JSON.parse(JSON.stringify(session.messages)) as UIMessage[]
+      );
+      clearError?.();
+      setPendingApiSetup(null);
+      setPendingScrapeSetup(null);
+    },
+    [
+      activeSessionId,
+      anchorNodeId,
+      clearError,
+      messages,
+      sessionUserId,
+      setActiveSession,
+      setMessages,
+      updateSessionMessages,
+    ]
+  );
+
+  const activeChatKey =
+    anchorNodeId && activeSessionId
+      ? chatSessionKey(anchorNodeId, activeSessionId)
+      : chatKeyFromAnchor(anchorNodeId);
 
   const appendAssistantMessage = useCallback(
     (text: string) => {
@@ -982,13 +1149,29 @@ export function AskChatPanel({ anchorNodeId }: Props) {
       {/* Actions first so they are never clipped under the fold (pane uses overflow-hidden). */}
       <div className="flex shrink-0 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-2">
+          <ChatHistoryPanel
+            ownerId={sessionUserId ?? ""}
+            sessionReady={sessionUserId !== null}
+            anchorNodeId={anchorNodeId}
+            activeSessionId={activeSessionId}
+            currentMessagesCount={messages.length}
+            busy={busy || commandBusy}
+            namingInProgress={namingInProgress}
+            onNewChat={handleNewChat}
+            onSelectSession={handleSelectSession}
+          />
           <ChatRecycleBinPanel
             ownerId={sessionUserId ?? ""}
             sessionReady={sessionUserId !== null}
             anchorNodeId={anchorNodeId}
+            activeChatKey={activeChatKey}
             currentMessagesCount={messages.length}
             onRestoreMessages={(restored) => {
+              loadedSessionRef.current = activeSessionId;
               setMessages(restored);
+              if (activeSessionId) {
+                updateSessionMessages(activeSessionId, restored);
+              }
               clearError?.();
             }}
           />
@@ -1033,8 +1216,7 @@ export function AskChatPanel({ anchorNodeId }: Props) {
         </div>
         <p className="text-[10px] leading-snug text-muted-foreground">
           Streams from <code className="text-foreground">/api/chat</code> with your
-          Supabase graph block. Recycle bin saves in this browser until you erase
-          archived rows.
+          graph context. Chat history and recycle bin are stored in this browser.
         </p>
         {pendingApiSetup ? (
           <p className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
@@ -1116,20 +1298,24 @@ export function AskChatPanel({ anchorNodeId }: Props) {
           if (!user) return;
 
           archiveConversation({
-            chatKey: chatKeyFromAnchor(anchorNodeId),
+            chatKey: activeChatKey,
             anchorNodeId,
             nodeTitleAtDelete: nodeTitle,
             ownerId: user.id,
             messages,
           });
-          setMessages([]);
-          if (historyStorageKey) {
-            try {
-              window.localStorage.removeItem(historyStorageKey);
-            } catch {
-              /* ignore */
-            }
+          if (sessionUserId && anchorNodeId && activeSessionId) {
+            const newId = archiveAndStartNew({
+              ownerId: sessionUserId,
+              anchorNodeId,
+              sessionId: activeSessionId,
+              title: "Deleted chat",
+              messages,
+            });
+            loadedSessionRef.current = newId;
+            setActiveSessionId(newId);
           }
+          setMessages([]);
           clearError?.();
         }}
       />
