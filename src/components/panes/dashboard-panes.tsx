@@ -9,6 +9,7 @@ import { AskChatPanel } from "@/components/chat/ask-chat-panel";
 import { MermaidDiagram } from "@/components/ui/mermaid-diagram";
 import { Button } from "@/components/ui/button";
 import type { ActiveNodeSyncState, LinkedInfluence } from "@/hooks/use-active-node-sync";
+import { randomId } from "@/lib/random-id";
 import { cn } from "@/lib/utils";
 import {
   useNodeStore,
@@ -1068,7 +1069,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
     setGooglePhotosNotice(null);
     setGooglePhotosLoading(true);
     try {
-      const requestId = crypto.randomUUID();
+      const requestId = randomId();
       const sessionRes = await fetch("/api/google-photos/picker-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1192,7 +1193,7 @@ export function ContextPane({ sync }: { sync: ActiveNodeSyncState }) {
           metadata.photo && typeof metadata.photo === "object"
             ? (metadata.photo as Record<string, unknown>)
             : {};
-        const id = typeof item.id === "string" ? item.id : crypto.randomUUID();
+        const id = typeof item.id === "string" ? item.id : randomId();
         const maybeType =
           typeof item.itemType === "string"
             ? item.itemType.toLowerCase()

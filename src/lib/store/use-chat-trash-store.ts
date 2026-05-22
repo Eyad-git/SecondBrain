@@ -1,5 +1,6 @@
 import type { UIMessage } from "ai";
 import { create } from "zustand";
+import { randomId } from "@/lib/random-id";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export type ArchivedChatEntry = {
@@ -45,7 +46,7 @@ export const useChatTrashStore = create<ChatTrashStore>()(
         ownerId,
         messages,
       }) => {
-        const id = crypto.randomUUID();
+        const id = randomId();
         const archived: ArchivedChatEntry = {
           id,
           chatKey,

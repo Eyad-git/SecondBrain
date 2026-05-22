@@ -20,6 +20,7 @@ import { ChatConfirmModal } from "@/components/chat/chat-confirm-modal";
 import { ChatRecycleBinPanel } from "@/components/chat/chat-recycle-bin-panel";
 import { MermaidDiagram } from "@/components/ui/mermaid-diagram";
 import { Button } from "@/components/ui/button";
+import { randomId } from "@/lib/random-id";
 import { createClient } from "@/lib/supabase/client";
 import {
   chatKeyFromAnchor,
@@ -123,7 +124,7 @@ function collectUserTexts(messages: UIMessage[]): string {
 
 function makeLocalAssistantMessage(text: string): UIMessage {
   return {
-    id: `local-${crypto.randomUUID()}`,
+    id: `local-${randomId()}`,
     role: "assistant",
     parts: [{ type: "text", text }],
   };
@@ -312,7 +313,7 @@ export function AskChatPanel({ anchorNodeId }: Props) {
       setMessages((prev) => [
         ...prev,
         {
-          id: `local-user-${crypto.randomUUID()}`,
+          id: `local-user-${randomId()}`,
           role: "user",
           parts: [{ type: "text", text }],
         },
